@@ -1,0 +1,9 @@
+H	ANC263TAG1	1	26.3-snapshot-7	06157fedd67ff4dd6e0e6fa4a9dd0af296f0dd61	5009	115
+T	#minecraft:features_cannot_replace	data/minecraft/tags/block/features_cannot_replace.json	a117e03f857eacf14ff5862ba6f885bb02b476a844b683c2be61211202a9a10d	7	67808dcc146a9650d467225228d3829ffad39885b7e25dec8105e1dd18166a81	0
+M	0	minecraft:bedrock
+M	1	minecraft:spawner
+M	2	minecraft:chest
+M	3	minecraft:end_portal_frame
+M	4	minecraft:reinforced_deepslate
+M	5	minecraft:trial_spawner
+M	6	minecraft:vault

@@ -1,6 +1,6 @@
 plugins { id 'java-library' }
 group = 'io.github.f-api'
-version = '1.0.0'
+version = '1.1.0'
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
     withSourcesJar()
@@ -15,3 +15,59 @@ tasks.withType(JavaCompile).configureEach {
     options.encoding = 'UTF-8'
     options.compilerArgs.add('-parameters')
 }
+
+repositories { mavenCentral() }
+dependencies {
+    compileOnly platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
+    annotationProcessor platform('org.springframework.boot:spring-boot-dependencies:4.1.0')
+    compileOnly 'org.projectlombok:lombok'
+    annotationProcessor 'org.projectlombok:lombok'
+    compileOnly 'tools.jackson.core:jackson-databind'
+    compileOnly 'com.fasterxml.jackson.core:jackson-annotations'
+    compileOnly 'org.springframework:spring-tx'
+    compileOnly 'org.slf4j:slf4j-api'
+}
+
+def producerResources = layout.buildDirectory.dir('producer-resources')
+tasks.register('prepareProducerBundle') {
+    def archive = producerResources.map { it.file('generation-producers/runtime.zip') }
+    outputs.file(archive)
+    doLast {
+        def destination = archive.get().asFile
+        destination.parentFile.mkdirs()
+        def connection = URI.create('https://github.com/f-api/webcraft-engine/releases/download/v1.1.0/webcraft-producer-1.1.0.zip').toURL().openConnection()
+        connection.connectTimeout = 30000
+        connection.readTimeout = 180000
+        def temporary = new File(destination.parentFile, 'runtime.zip.download')
+        try {
+            connection.inputStream.withCloseable { input ->
+                temporary.withOutputStream { output -> output << input }
+            }
+            def hash = java.security.MessageDigest.getInstance('SHA-256')
+                .digest(temporary.bytes).encodeHex().toString()
+            if (hash != 'abdfa334ea533f85172b437bc11b9340a7735d896817ce8ec6e17632c6aee6f7') throw new GradleException('Producer archive checksum mismatch')
+            java.nio.file.Files.move(temporary.toPath(), destination.toPath(),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+        } finally { temporary.delete() }
+    }
+}
+sourceSets.main.resources.srcDir(producerResources)
+tasks.named('processResources') { dependsOn tasks.named('prepareProducerBundle') }
+
+def verificationClasses = layout.buildDirectory.dir('verification/classes')
+tasks.register('compileProducerVerification', JavaCompile) {
+    dependsOn tasks.named('classes')
+    source fileTree('verification') { include '*.java' }
+    classpath = sourceSets.main.output + configurations.compileClasspath
+    destinationDirectory = verificationClasses
+    javaCompiler = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(21) }
+    options.release = 21
+}
+tasks.register('verifyProducerBundle', JavaExec) {
+    dependsOn tasks.named('compileProducerVerification'), tasks.named('jar')
+    classpath = files(verificationClasses, tasks.named('jar').flatMap { it.archiveFile })
+    mainClass = 'com.gameexpert.authority.versioned.ProducerBundleSmoke'
+    javaLauncher = javaToolchains.launcherFor { languageVersion = JavaLanguageVersion.of(21) }
+    jvmArgs '-Duser.home=' + layout.buildDirectory.dir('verification/home').get().asFile.absolutePath
+}
+tasks.named('check') { dependsOn tasks.named('verifyProducerBundle') }

@@ -1,0 +1,14 @@
+H	ANC263TAG1	1	26.3-snapshot-7	06157fedd67ff4dd6e0e6fa4a9dd0af296f0dd61	5009	115
+T	#minecraft:ancient_city_replaceable	data/minecraft/tags/block/ancient_city_replaceable.json	dfe7692dddb25cd1945334741782d2b85048aad2d20fc8e1106585a23ec34acf	12	7868e77ba988bf9ce919025c547fa2b9e75999197ad3f431b1de6481e3f5d113	0
+M	0	minecraft:deepslate
+M	1	minecraft:deepslate_bricks
+M	2	minecraft:deepslate_tiles
+M	3	minecraft:deepslate_brick_slab
+M	4	minecraft:deepslate_tile_slab
+M	5	minecraft:deepslate_brick_stairs
+M	6	minecraft:deepslate_tile_wall
+M	7	minecraft:deepslate_brick_wall
+M	8	minecraft:cobbled_deepslate
+M	9	minecraft:cracked_deepslate_bricks
+M	10	minecraft:cracked_deepslate_tiles
+M	11	minecraft:gray_wool
