@@ -67,6 +67,17 @@ final class WsFields {
         return value.asString();
     }
 
+    static String optionalFinalSceneActionId(JsonNode message) {
+        JsonNode value = message.get("finalSceneActionId");
+        if (value == null) {
+            return null;
+        }
+        if (!value.isString()) {
+            throw new IllegalArgumentException("finalSceneActionId 형식이 올바르지 않습니다.");
+        }
+        return value.asString();
+    }
+
     static PlayerAction.Hand hand(JsonNode message) {
         return switch (text(message, "hand")) {
             case "main" -> PlayerAction.Hand.MAIN;
