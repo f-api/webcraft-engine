@@ -76,6 +76,25 @@ SET @furnace_xp_table_exists = EXISTS(
       AND table_name = 'world_furnaces'
       AND table_type = 'BASE TABLE');
 
+-- Engine 2.1.3 inherited the MySQL 8 default for Hibernate-owned tables.
+-- Change only the table default; existing text columns and unique-key semantics stay intact.
+SET @furnace_xp_previous_metadata_timeout = @@SESSION.lock_wait_timeout;
+SET SESSION lock_wait_timeout = 30;
+SET @furnace_xp_default_ddl = IF(
+    @furnace_xp_lock_result = 1 AND EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND table_type = 'BASE TABLE' AND engine = 'InnoDB'
+          AND table_collation = 'utf8mb4_0900_ai_ci'
+          AND COALESCE(create_options, '') = ''),
+    CONCAT('ALTER TABLE ', @furnace_xp_table,
+        ' DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'),
+    'SELECT 1');
+PREPARE furnace_xp_default_statement FROM @furnace_xp_default_ddl;
+EXECUTE furnace_xp_default_statement;
+DEALLOCATE PREPARE furnace_xp_default_statement;
+SET SESSION lock_wait_timeout = @furnace_xp_previous_metadata_timeout;
+
 -- Table creation remains owned by Hibernate. A not-yet-created table is a valid no-op.
 SET @furnace_xp_table_contract_exact = IF(
     @furnace_xp_table_object_exists = 0,
@@ -96,6 +115,69 @@ SET @furnace_xp_table_contract_exact = IF(
 SELECT CASE
     WHEN @furnace_xp_table_contract_exact = 1
     THEN 1 ELSE REGEXP_LIKE('x', '[') END;
+
+-- These two installation fields are compared in Java, never in a SQL key.
+-- Preserve their UTF-8 values, type and nullability while repairing the known old collation.
+SET @furnace_xp_previous_text_timeout = @@SESSION.lock_wait_timeout;
+SET SESSION lock_wait_timeout = 30;
+SET @furnace_xp_text_ddl = IF(
+    @furnace_xp_lock_result = 1 AND @furnace_xp_table_contract_exact = 1
+    AND EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND column_name = 'generated_installation_id'
+          AND column_type = 'varchar(255)' AND is_nullable = 'YES'
+          AND column_default IS NULL AND extra = '' AND column_comment = ''
+          AND COALESCE(generation_expression, '') = ''
+          AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_0900_ai_ci')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND column_name = 'generated_installation_id')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND COALESCE(generation_expression, '') <> '')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND expression IS NOT NULL)
+    AND NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND constraint_type NOT IN ('PRIMARY KEY', 'UNIQUE')),
+    CONCAT('ALTER TABLE ', @furnace_xp_table,
+        ' MODIFY COLUMN `generated_installation_id` VARCHAR(255)',
+        ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL'),
+    'SELECT 1');
+PREPARE furnace_xp_text_statement FROM @furnace_xp_text_ddl;
+EXECUTE furnace_xp_text_statement;
+DEALLOCATE PREPARE furnace_xp_text_statement;
+
+SET @furnace_xp_text_ddl = IF(
+    @furnace_xp_lock_result = 1 AND @furnace_xp_table_contract_exact = 1
+    AND EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND column_name = 'generated_installation_fingerprint'
+          AND column_type = 'varchar(64)' AND is_nullable = 'YES'
+          AND column_default IS NULL AND extra = '' AND column_comment = ''
+          AND COALESCE(generation_expression, '') = ''
+          AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_0900_ai_ci')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND column_name = 'generated_installation_fingerprint')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.columns
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND COALESCE(generation_expression, '') <> '')
+    AND NOT EXISTS (SELECT 1 FROM information_schema.statistics
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND expression IS NOT NULL)
+    AND NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+        WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+          AND constraint_type NOT IN ('PRIMARY KEY', 'UNIQUE')),
+    CONCAT('ALTER TABLE ', @furnace_xp_table,
+        ' MODIFY COLUMN `generated_installation_fingerprint` VARCHAR(64)',
+        ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL DEFAULT NULL'),
+    'SELECT 1');
+PREPARE furnace_xp_text_statement FROM @furnace_xp_text_ddl;
+EXECUTE furnace_xp_text_statement;
+DEALLOCATE PREPARE furnace_xp_text_statement;
+SET SESSION lock_wait_timeout = @furnace_xp_previous_text_timeout;
 
 SET @furnace_xp_column_exists = EXISTS(
     SELECT 1

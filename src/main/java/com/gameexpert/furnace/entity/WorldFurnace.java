@@ -20,6 +20,7 @@ import com.gameexpert.engine.FurnaceInventory;
 @Entity
 @Table(
         name = "world_furnaces",
+        options = "DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci",
         uniqueConstraints = @UniqueConstraint(
                 name = "uk_world_furnace_pos",
                 columnNames = { "world_id", "pos_x", "pos_y", "pos_z" }))

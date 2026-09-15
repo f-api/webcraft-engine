@@ -41,6 +41,25 @@ SET @canonical_loot_context_table_exists = EXISTS(
     WHERE table_schema = DATABASE()
       AND table_name = 'world_canonical_loot_assignments'
       AND table_type = 'BASE TABLE');
+-- Engine 2.1.3 inherited the MySQL 8 default for Hibernate-owned tables.
+-- Change only the table default; existing text columns and unique-key semantics stay intact.
+SET @canonical_loot_context_previous_metadata_timeout = @@SESSION.lock_wait_timeout;
+SET SESSION lock_wait_timeout = 30;
+SET @canonical_loot_context_default_ddl = IF(
+    @canonical_loot_context_lock_result = 1 AND EXISTS (
+        SELECT 1 FROM information_schema.tables
+        WHERE table_schema = DATABASE() AND table_name = 'world_canonical_loot_assignments'
+          AND table_type = 'BASE TABLE' AND engine = 'InnoDB'
+          AND table_collation = 'utf8mb4_0900_ai_ci'
+          AND COALESCE(create_options, '') = ''),
+    CONCAT('ALTER TABLE ', @canonical_loot_context_table,
+        ' DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci'),
+    'SELECT 1');
+PREPARE canonical_loot_context_default_statement FROM @canonical_loot_context_default_ddl;
+EXECUTE canonical_loot_context_default_statement;
+DEALLOCATE PREPARE canonical_loot_context_default_statement;
+SET SESSION lock_wait_timeout = @canonical_loot_context_previous_metadata_timeout;
+
 SET @canonical_loot_context_table_contract_exact = IF(
     @canonical_loot_context_table_object_exists = 0,
     1,

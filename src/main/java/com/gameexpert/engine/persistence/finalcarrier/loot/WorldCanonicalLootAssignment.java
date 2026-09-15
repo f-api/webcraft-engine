@@ -22,7 +22,8 @@ import lombok.NoArgsConstructor;
 /** Current-only durable lazy container-loot assignment. */
 @Getter
 @Entity
-@Table(name = "world_canonical_loot_assignments", uniqueConstraints = {
+@Table(name = "world_canonical_loot_assignments",
+        options = "DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci", uniqueConstraints = {
         @UniqueConstraint(name = "uk_canonical_loot_installation_cell",
                 columnNames = {"lane_installation_identity", "packed"}),
         @UniqueConstraint(name = "uk_canonical_loot_world_position",
