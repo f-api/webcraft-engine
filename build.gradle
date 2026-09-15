@@ -1,6 +1,6 @@
 plugins { id 'java-library' }
 group = 'io.github.f-api'
-version = '1.1.1'
+version = '2.0.0'
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
     withSourcesJar()
@@ -26,6 +26,11 @@ dependencies {
     compileOnly 'com.fasterxml.jackson.core:jackson-annotations'
     compileOnly 'org.springframework:spring-tx'
     compileOnly 'org.springframework.boot:spring-boot'
+    compileOnly 'org.springframework.boot:spring-boot-starter-data-jpa'
+    compileOnly 'org.springframework.boot:spring-boot-starter-data-redis'
+    compileOnly 'org.springframework.boot:spring-boot-starter-webmvc'
+    compileOnly 'org.springframework.boot:spring-boot-starter-websocket'
+    compileOnly 'org.springframework.boot:spring-boot-starter-validation'
     compileOnly 'org.slf4j:slf4j-api'
 }
 
@@ -85,3 +90,25 @@ tasks.named('sourcesJar') {
     dependsOn tasks.named('prepareProducerBundle')
     include '**/*.java'
 }
+
+
+def componentResources = layout.buildDirectory.dir('component-resources')
+tasks.register('generateComponentIndex') {
+    inputs.files(sourceSets.main.allJava)
+    def index = componentResources.map { it.file('META-INF/webcraft-components.txt') }
+    outputs.file(index)
+    doLast {
+        def components = sourceSets.main.allJava.files.findAll { source ->
+            source.text =~ /(?m)^@(Component|Service|Configuration|RestController|Controller|Repository)(\s|\(|$)/
+        }.collect { source ->
+            def packageName = (source.text =~ /package\s+([\w.]+);/)[0][1]
+            packageName + '.' + source.name.replace('.java', '')
+        }.sort()
+        def target = index.get().asFile
+        target.parentFile.mkdirs()
+        target.text = components.join('\n') + '\n'
+    }
+}
+sourceSets.main.resources.srcDir(componentResources)
+tasks.named('processResources') { dependsOn tasks.named('generateComponentIndex') }
+tasks.named('sourcesJar') { dependsOn tasks.named('generateComponentIndex') }

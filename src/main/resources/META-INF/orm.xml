@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<entity-mappings xmlns="https://jakarta.ee/xml/ns/persistence/orm"
+                 xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+                 xsi:schemaLocation="https://jakarta.ee/xml/ns/persistence/orm https://jakarta.ee/xml/ns/persistence/orm/orm_3_2.xsd"
+                 version="3.2">
+    <entity class="com.gameexpert.block.entity.WorldBlockDiff">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.dragonfight.entity.WorldDragonFight">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.banner.entity.WorldBannerBlock">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.sign.entity.WorldSignBlock">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.endgateway.entity.WorldEndGateway">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.jukebox.entity.WorldJukebox">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.map.entity.WorldMap">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.shulker.entity.ShulkerContents">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.state.entity.PlayerDimensionTravel">
+        <attributes>
+            <many-to-one name="root" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+            <many-to-one name="player" target-entity="com.gameexpert.player.entity.Player" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.state.entity.PlayerWorldState">
+        <attributes>
+            <many-to-one name="player" target-entity="com.gameexpert.player.entity.Player" fetch="LAZY" optional="false"/>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.world.entity.WorldDimension">
+        <attributes>
+            <many-to-one name="root" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+            <many-to-one name="child" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.falling.entity.WorldFallingSpeleothem">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.falling.entity.WorldRuntimeFallCheckpoint">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.falling.entity.WorldRuntimeSpeleothemFall">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+    <entity class="com.gameexpert.lectern.entity.WorldLectern">
+        <attributes>
+            <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
+        </attributes>
+    </entity>
+</entity-mappings>
