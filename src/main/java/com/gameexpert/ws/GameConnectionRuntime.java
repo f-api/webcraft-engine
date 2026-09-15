@@ -67,6 +67,7 @@ public class GameConnectionRuntime {
     }
 
     public void prepare(WebSocketSession session) {
+        HeartbeatMonitor.awaitingWelcome(session);
         broadcaster.registerAwaitingWelcome(session);
     }
 
@@ -120,6 +121,7 @@ public class GameConnectionRuntime {
                     throw new IllegalStateException("Welcome 송신 경계를 열지 못했습니다.");
                 }
                 if (session instanceof DimensionSession dimensionSession) dimensionSession.welcomeComplete();
+                HeartbeatMonitor.welcomeCompleted(session);
             }
             broadcaster.sendTo(session, new com.gameexpert.ws.dto.WsMessages.PlayerStatistics(
                     state.sleepInStrawBedOrZero()));
@@ -171,10 +173,16 @@ public class GameConnectionRuntime {
         if (session instanceof DimensionSession dimensionSession) {
             synchronized (dimensionSession) {
                 if (dimensionSession.inputReady()) {
+                    HeartbeatMonitor.received(session, message.getPayload());
                     dispatch.accept(new WsMessageContext(worldId, nickname, session), message.getPayload());
                 }
             }
-        } else dispatch.accept(new WsMessageContext(worldId, nickname, session), message.getPayload());
+        } else {
+            synchronized (session) {
+                HeartbeatMonitor.received(session, message.getPayload());
+                dispatch.accept(new WsMessageContext(worldId, nickname, session), message.getPayload());
+            }
+        }
     }
 
     public void closed(WebSocketSession session) {

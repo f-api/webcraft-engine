@@ -95,6 +95,7 @@ import jakarta.annotation.PreDestroy;
  * WS 스레드는 여기 {@code onPlayerJoin/onPlayerLeave/enqueue}로만 런타임과 상호작용합니다.
  */
 @Component
+@org.springframework.context.annotation.DependsOn("chatHistoryIndexRequirement")
 public class WorldEngineManager
         implements FinalSceneH12fOutcomeService.CompletedLedgerProvider,
         FinalSceneH12gOutcomeService.CompletedLedgerProvider {

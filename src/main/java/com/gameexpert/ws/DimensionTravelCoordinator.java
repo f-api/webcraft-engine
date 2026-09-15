@@ -225,12 +225,14 @@ public class DimensionTravelCoordinator {
     }
 
     private void retireSource(DimensionSession source, String nickname) {
-        var removed = sessions.remove(source.identity().runtimeWorldId(), nickname, source);
-        broadcaster.forget(source);
-        if (removed != null) {
-            try { presence.leave(source.identity().runtimeWorldId(), source.getId()); }
-            catch (RuntimeException failure) { log.warn("dimension source presence release failed", failure); }
-            broadcaster.broadcast(source.identity().runtimeWorldId(), new WsMessages.PlayerLeave(nickname));
+        synchronized (source) {
+            SessionRegistry.Entry removed = sessions.remove(source.identity().runtimeWorldId(), nickname, source);
+            broadcaster.forget(source);
+            if (removed != null) {
+                try { presence.leave(source.identity().runtimeWorldId(), source.getId()); }
+                catch (RuntimeException failure) { log.warn("dimension source presence release failed", failure); }
+                broadcaster.broadcast(source.identity().runtimeWorldId(), new WsMessages.PlayerLeave(nickname));
+            }
         }
     }
 
