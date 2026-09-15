@@ -9,3 +9,5 @@ WebCraft 게임 알고리즘과 실행 리소스 라이브러리입니다. JDK 2
 과제용 Entity, Controller와 Service, WebSocket 및 Redis 구현은 학생 프로젝트에서 관리합니다. 관련 Entity는 이 라이브러리에 포함하지 않습니다.
 
 일반 의존성 사용 시 실행 JAR만 필요합니다. 소스 JAR과 생성기 ZIP은 유지보수 및 재현 빌드용 릴리스 첨부 파일입니다.
+
+엔진용 SQL 초기화, 컬럼 명명 규칙, Open-in-View, Redis Repository 비활성화와 HTTP 압축은 라이브러리가 기본값으로 제공합니다. 애플리케이션 설정과 환경변수가 우선합니다. MySQL 및 Redis 접속 정보와 JPA `ddl-auto`는 제공하지 않습니다. `./gradlew verifyDefaults`로 기본값과 덮어쓰기를 확인할 수 있습니다.
