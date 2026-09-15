@@ -34,11 +34,9 @@ import java.util.function.LongSupplier;
 /**
  * Exact, bounded runtime core for final-carrier BTIK and FTIK lanes.
  *
- * <p>This class deliberately has no database implementation and is not attached to
- * {@code WorldRuntime}. A production {@link AtomicPersistence} must atomically persist lane
- * admission and its carrier ACK, and must atomically settle a due tick with every resulting block
- * diff. The current asynchronous {@code BlockDiffBuffer} cannot provide either boundary; keeping
- * this core dormant is therefore safer than acknowledging a carrier approximately.</p>
+ * <p>The world owner supplies an {@link AtomicPersistence} boundary that atomically persists lane
+ * admission with its carrier ACK, and settles each due tick with every resulting durable mutation.
+ * Live publication and its exact ACK finish before another tick is planned.</p>
  */
 public final class FinalCarrierTickScheduler {
 
@@ -496,7 +494,20 @@ public final class FinalCarrierTickScheduler {
      * plan, rather than recomputing it on a retry, prevents a changed live overlay from changing
      * the mutation authenticated by an unknown or already-committed result.
      */
-    private final Map<TickKey, PendingSettlement> pendingSettlements = new HashMap<>();
+    private final Map<TickKey, PendingSettlement> pendingSettlements = new LinkedHashMap<>();
+    private final Map<TickKey, SettlementResult> completedSettlements = new HashMap<>();
+    private final Map<TickKey, DurablePublication> begunPublications = new HashMap<>();
+    /** A cold prefix is visited once per pass, even when scanning spans several owner turns. */
+    private final Map<Lane, LaneScan> laneScans = new java.util.EnumMap<>(Lane.class);
+
+    private static final class LaneScan {
+        private final long dueAt;
+        private ScheduledTick last;
+        private ScheduledTick current;
+        private boolean unavailable;
+
+        private LaneScan(long dueAt) { this.dueAt = dueAt; }
+    }
     private final TreeSet<ScheduledTick> blockQueue = new TreeSet<>(TICK_ORDER);
     private final TreeSet<ScheduledTick> fluidQueue = new TreeSet<>(TICK_ORDER);
     private Thread drainOwner;
@@ -730,8 +741,10 @@ public final class FinalCarrierTickScheduler {
         List<ScheduledTick> installRows = new ArrayList<>(worldRows);
         installRows.addAll(activePublications.values().stream()
                 .map(DurablePublication::tick).toList());
-        Map<TickKey, PendingSettlement> stagedPending = new HashMap<>(pendingSettlements);
-        for (DurablePublication publication : activePublications.values()) {
+        Map<TickKey, PendingSettlement> stagedPending = new LinkedHashMap<>(pendingSettlements);
+        for (DurablePublication publication : activePublications.values().stream()
+                .sorted(Comparator.comparing(DurablePublication::tick,
+                        Comparator.comparing(ScheduledTick::lane).thenComparing(TICK_ORDER))).toList()) {
             PendingSettlement pending = new PendingSettlement(
                     publication.tick(), publication.disposition(), publication.mutation());
             PendingSettlement previous = stagedPending.put(publication.tick().key(), pending);
@@ -803,9 +816,9 @@ public final class FinalCarrierTickScheduler {
     /**
      * Wall-clock bounded drain. Every settled row costs one durable transaction, so a first-generation
      * neighbourhood can make tens of thousands of rows due in the same owner turn; without a deadline the
-     * owner turn is unbounded. The deadline never reorders anything: rows are still taken in TICK_ORDER,
-     * BLOCK still precedes FLUID, and a lane whose due head is unavailable remains in exact order for
-     * the next turn. The first available due row may settle before the deadline; a turn with only
+     * owner turn is unbounded. Each lane retains TICK_ORDER; the BLOCK slice precedes the reserved
+     * FLUID slice. Unavailable rows retain their exact due time while a bounded, resumable scan
+     * visits the rest of that lane. The first available due row may settle before the deadline; a turn with only
      * unavailable heads may settle zero rows.
      */
     public int drainDue(long nowMcTick, LiveTypes liveTypes, TickSemantics semantics,
@@ -829,34 +842,75 @@ public final class FinalCarrierTickScheduler {
         requireNow(nowMcTick);
         if (!beginDrain()) return new DrainReport(0, DrainStatus.REENTRANT);
         try {
-            LaneDrainResult blocks = drainLane(
-                blockQueue, nowMcTick, liveTypes, semantics, committedSink, budget, deadlineNanos);
-            if (blocks.status() == DrainStatus.RETRY || blocks.status() == DrainStatus.DEADLINE) {
-                return new DrainReport(blocks.processed(), blocks.status());
+            // The half-slice limits starting new BLOCK work, not completing an already planned
+            // mutation. A retained plan/publication (including FLUID from a prior turn) is a
+            // causal barrier: finish it before planning either lane against the live overlay.
+            long nowNanos = nanoTime.getAsLong();
+            long blockDeadline = deadlineNanos == Long.MAX_VALUE ? Long.MAX_VALUE
+                    : nowNanos + Math.max(0L, deadlineNanos - nowNanos) / 2;
+            int blockCount = 0;
+            int fluidCount = 0;
+            while (!pendingSettlements.isEmpty()) {
+                Lane lane = pendingSettlements.values().iterator().next().tick().lane();
+                if ((lane == Lane.BLOCK ? blockCount : fluidCount) >= budget) {
+                    return new DrainReport(blockCount + fluidCount, DrainStatus.DRAINED);
+                }
+                LaneDrainResult resumed = drainLane(lane, nowMcTick, liveTypes, semantics,
+                        committedSink, 1, deadlineNanos, deadlineNanos, true);
+                if (lane == Lane.BLOCK) blockCount += resumed.processed();
+                else fluidCount += resumed.processed();
+                if (resumed.status() != DrainStatus.DRAINED) {
+                    return new DrainReport(blockCount + fluidCount, resumed.status());
+                }
             }
-            LaneDrainResult fluids = drainLane(
-                    fluidQueue, nowMcTick, liveTypes, semantics, committedSink, budget,
-                    deadlineNanos);
+            LaneDrainResult blocks = drainLane(Lane.BLOCK, nowMcTick, liveTypes, semantics,
+                    committedSink, budget - blockCount, blockDeadline, deadlineNanos, false);
+            blockCount += blocks.processed();
+            if (blocks.status() == DrainStatus.RETRY || !pendingSettlements.isEmpty()) {
+                return new DrainReport(blockCount + fluidCount, blocks.status());
+            }
+            if (deadlineReached(deadlineNanos)) {
+                return new DrainReport(blockCount + fluidCount, DrainStatus.DEADLINE);
+            }
+            LaneDrainResult fluids = drainLane(Lane.FLUID, nowMcTick, liveTypes, semantics,
+                    committedSink, budget - fluidCount, deadlineNanos, deadlineNanos, false);
             DrainStatus status = fluids.status() == DrainStatus.DRAINED
                     ? blocks.status() : fluids.status();
-            return new DrainReport(blocks.processed() + fluids.processed(), status);
+            return new DrainReport(blockCount + fluidCount + fluids.processed(), status);
         } finally {
             endDrain();
         }
     }
 
-    private LaneDrainResult drainLane(TreeSet<ScheduledTick> queue, long nowMcTick,
-            LiveTypes liveTypes,
+    private LaneDrainResult drainLane(Lane lane, long nowMcTick, LiveTypes liveTypes,
             TickSemantics semantics, CommittedMutationSink committedSink, int budget,
-            long deadlineNanos) {
+            long startDeadlineNanos, long deadlineNanos, boolean resumeOnly) {
+        TreeSet<ScheduledTick> queue = queue(lane);
         int processed = 0;
         while (processed < budget && !queue.isEmpty()) {
             if (deadlineReached(deadlineNanos)) {
                 return new LaneDrainResult(processed, DrainStatus.DEADLINE);
             }
-            ScheduledTick tick = queue.first();
-            if (tick.dueTick() > nowMcTick) break;
-            PendingSettlement pending = pendingSettlements.get(tick.key());
+            PendingSettlement pending = resumeOnly ? pendingSettlements.values().stream()
+                    .filter(value -> value.tick().lane() == lane).findFirst().orElse(null) : null;
+            ScheduledTick tick;
+            if (pending != null) {
+                tick = pending.tick();
+            } else {
+                if (resumeOnly) break;
+                if (deadlineReached(startDeadlineNanos)) {
+                    return new LaneDrainResult(processed, DrainStatus.DEADLINE);
+                }
+                LaneScan scan = laneScans.computeIfAbsent(lane, ignored -> new LaneScan(nowMcTick));
+                tick = scan.last == null ? queue.first() : queue.higher(scan.last);
+                if (tick == null || tick.dueTick() > scan.dueAt) {
+                    laneScans.remove(lane);
+                    return new LaneDrainResult(processed,
+                            scan.unavailable ? DrainStatus.UNAVAILABLE : DrainStatus.DRAINED);
+                }
+                scan.current = tick;
+                pending = pendingSettlements.get(tick.key());
+            }
             if (pending == null) {
                 DueDisposition disposition;
                 TickMutation mutation;
@@ -875,12 +929,13 @@ public final class FinalCarrierTickScheduler {
                                 semantics.plan(tick, liveTypes), "mutation");
                     }
                 } catch (UnavailableNeighborhood unavailable) {
-                    // Vanilla only runs a scheduled tick whose semantic neighbourhood is loaded. An
-                    // overdue row whose neighbour chunk left residency is neither malformed nor
-                    // settleable: hold the head and everything behind it for the next turn.
-                    return new LaneDrainResult(processed,
-                            deadlineReached(deadlineNanos)
-                                    ? DrainStatus.DEADLINE : DrainStatus.UNAVAILABLE);
+                    // No plan or durable work exists for this row. Keep its absolute due time,
+                    // but let ready rows behind it run; resume the scan after it next turn.
+                    LaneScan scan = laneScans.get(lane);
+                    scan.last = tick;
+                    scan.current = null;
+                    scan.unavailable = true;
+                    continue;
                 }
                 pending = new PendingSettlement(tick, disposition, mutation);
                 pendingSettlements.put(tick.key(), pending);
@@ -898,9 +953,15 @@ public final class FinalCarrierTickScheduler {
             // would apply it twice for no durable gain.
             DurablePublication publication = awaitingAcknowledgement.get(tick.key());
             if (publication == null) {
-                SettlementResult settled = settlementStep(tick, SettlementStage.SETTLE,
-                        deadlineNanos, () -> persistence.settleAtomicallyWithPlan(
-                                tick, plan.disposition(), plan.mutation()));
+                SettlementResult settled = completedSettlements.get(tick.key());
+                if (settled == null) {
+                    settled = settlementStep(tick, SettlementStage.SETTLE,
+                            deadlineNanos, () -> persistence.settleAtomicallyWithPlan(
+                                    tick, plan.disposition(), plan.mutation()));
+                    if (settled != null && settled.status() != Settlement.RETRY) {
+                        completedSettlements.put(tick.key(), settled);
+                    }
+                }
                 if (settled == null) {
                     return new LaneDrainResult(processed, pendingStepStatus(deadlineNanos));
                 }
@@ -917,9 +978,13 @@ public final class FinalCarrierTickScheduler {
                 pendingSettlements.put(tick.key(), exactPending);
                 touchResident(tick);
                 final SettlementResult settlement = settled;
-                publication = settlementStep(tick, SettlementStage.BEGIN, deadlineNanos,
-                        () -> persistence.beginOutcomeUnknown(
-                                tick, plan.disposition(), settlement));
+                publication = begunPublications.get(tick.key());
+                if (publication == null) {
+                    publication = settlementStep(tick, SettlementStage.BEGIN, deadlineNanos,
+                            () -> persistence.beginOutcomeUnknown(
+                                    tick, plan.disposition(), settlement));
+                    if (publication != null) begunPublications.put(tick.key(), publication);
+                }
                 if (publication == null) {
                     return new LaneDrainResult(processed, pendingStepStatus(deadlineNanos));
                 }
@@ -950,9 +1015,15 @@ public final class FinalCarrierTickScheduler {
             // a sink exception leaves both maps untouched for deterministic retry.
             awaitingAcknowledgement.remove(tick.key());
             if (exactPending != null) pendingSettlements.remove(tick.key(), exactPending);
+            LaneScan scan = laneScans.get(lane);
+            if (scan != null && tick.equals(scan.current)) {
+                scan.last = tick;
+                scan.current = null;
+            }
             remove(tick);
             processed++;
         }
+        if (queue.isEmpty()) laneScans.remove(lane);
         return new LaneDrainResult(processed, DrainStatus.DRAINED);
     }
 
@@ -1125,10 +1196,11 @@ public final class FinalCarrierTickScheduler {
     private <T> T settlementStep(ScheduledTick tick, SettlementStage stage, long deadlineNanos,
             java.util.function.Supplier<T> durableStep) {
         SettlementExecutor executor = settlementExecutor;
-        if (executor == null) return durableStep.get();
+        if (executor == null) return deadlineReached(deadlineNanos) ? null : durableStep.get();
         StepKey stepKey = new StepKey(tick.key(), stage);
         OffThreadStep step = offThreadSteps.get(stepKey);
         if (step == null) {
+            if (deadlineReached(deadlineNanos)) return null;
             OffThreadStep started = new OffThreadStep();
             offThreadSteps.put(stepKey, started);
             boolean accepted;
@@ -1195,6 +1267,8 @@ public final class FinalCarrierTickScheduler {
     private void remove(ScheduledTick tick) {
         touchResident(tick);
         awaitingAcknowledgement.remove(tick.key());
+        completedSettlements.remove(tick.key());
+        begunPublications.remove(tick.key());
         if (pendingByKey.remove(tick.key(), tick)) queue(tick.lane()).remove(tick);
     }
 
