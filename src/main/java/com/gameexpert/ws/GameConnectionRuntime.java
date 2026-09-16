@@ -60,6 +60,10 @@ public class GameConnectionRuntime {
     }
 
     public WebSocketSession open(WebSocketSession session) throws Exception {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && !com.gameexpert.cluster.ClusterIdentity.isAuthority(session)) {
+            return cluster.openPhysical(session);
+        }
         if (dimensions != null && !(session instanceof DimensionSession)) {
             return dimensions.open(session);
         }
@@ -72,10 +76,17 @@ public class GameConnectionRuntime {
     }
 
     public void reject(WebSocketSession session) {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && cluster.isPhysical(session)) cluster.closedPhysical(session);
         broadcaster.forget(session);
     }
 
     public void joined(WebSocketSession session, SessionRegistry.Entry entry) throws Exception {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && cluster.isPhysical(session)) {
+            cluster.joinedPhysical(session);
+            return;
+        }
         Long worldId = (Long) session.getAttributes().get(ATTR_WORLD_ID);
         Long playerId = (Long) session.getAttributes().get(ATTR_PLAYER_ID);
         Integer seed = (Integer) session.getAttributes().get(ATTR_WORLD_SEED);
@@ -164,6 +175,13 @@ public class GameConnectionRuntime {
 
     public void receive(WebSocketSession session, TextMessage message,
             java.util.function.BiConsumer<WsMessageContext, String> dispatch) {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && cluster.isPhysical(session)) {
+            synchronized (cluster.physicalLock(session)) {
+                receivePhysical(cluster, session, message, dispatch);
+            }
+            return;
+        }
         if (dimensions != null) {
             session = dimensions.current(session);
             if (session == null || dimensions.consumeBarrier(session, message)) return;
@@ -198,7 +216,31 @@ public class GameConnectionRuntime {
         }
     }
 
+    private void receivePhysical(com.gameexpert.cluster.ClusterRuntime cluster, WebSocketSession physical,
+            TextMessage message, java.util.function.BiConsumer<WsMessageContext, String> dispatch) {
+        WebSocketSession session = cluster.currentPhysical(physical);
+        if (session == null || !session.isOpen() || cluster.consumePhysicalBarrier(session, message)) return;
+        SessionRegistry local = registry instanceof com.gameexpert.cluster.AuthoritySessions owned ? owned.local() : registry;
+        Long worldId = (Long) session.getAttributes().get(ATTR_WORLD_ID);
+        String nickname = (String) session.getAttributes().get(ATTR_NICKNAME);
+        SessionRegistry.Entry entry = local.get(worldId, nickname);
+        if (entry == null || entry.session() != session) return;
+        InboundRateLimiter.Decision decision = rateLimiter.check(session);
+        if (!decision.accepted()) {
+            if (decision == InboundRateLimiter.Decision.REJECT_NOTIFY) broadcaster.sendTo(session, new Error("RATE_LIMITED"));
+            return;
+        }
+        synchronized (session) {
+            if (!session.isOpen() || !cluster.physicalReady(session)) return;
+            HeartbeatMonitor.received(session, message.getPayload());
+            // The unchanged student router runs exactly once here. Engine handler proxies forward only game inputs.
+            dispatch.accept(new WsMessageContext(worldId, nickname, session), message.getPayload());
+        }
+    }
+
     public void closed(WebSocketSession session) {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && cluster.isPhysical(session)) { cluster.closedPhysical(session); return; }
         if (dimensions == null) sessionLifecycle.release(session);
         else dimensions.close(session);
     }

@@ -24,15 +24,15 @@ public final class HeartbeatMonitor {
         this.registry = registry;
     }
 
-    static void awaitingWelcome(WebSocketSession session) {
+    public static void awaitingWelcome(WebSocketSession session) {
         session.getAttributes().remove(LAST_PING);
     }
 
-    static void welcomeCompleted(WebSocketSession session) {
+    public static void welcomeCompleted(WebSocketSession session) {
         session.getAttributes().put(LAST_PING, System.nanoTime());
     }
 
-    static void received(WebSocketSession session, String payload) {
+    public static void received(WebSocketSession session, String payload) {
         try {
             JsonNode message = JSON.readTree(payload);
             if (message != null && "ping".equals(message.path("type").asString(""))) {
@@ -46,8 +46,9 @@ public final class HeartbeatMonitor {
     @Scheduled(fixedDelay = 5_000)
     public void closeExpiredConnections() {
         long now = System.nanoTime();
-        registry.worldIds().stream()
-                .flatMap(worldId -> registry.entries(worldId).stream())
+        SessionRegistry local = registry instanceof com.gameexpert.cluster.AuthoritySessions owned ? owned.local() : registry;
+        local.worldIds().stream()
+                .flatMap(worldId -> local.entries(worldId).stream())
                 .map(SessionRegistry.Entry::session)
                 .forEach(session -> closeIfExpired(session, now));
     }

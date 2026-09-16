@@ -788,6 +788,21 @@ public final class FinalCarrierTickScheduler {
         installValidated(prepared.ticks());
     }
 
+    /** A planned mutation is a causal barrier; keep its origin and destinations resident until ACK. */
+    public Set<Long> pendingPublicationChunks() {
+        Set<Long> chunks = new HashSet<>();
+        for (PendingSettlement pending : pendingSettlements.values()) {
+            ScheduledTick tick = pending.tick();
+            chunks.add(chunkStampKey(Math.floorDiv(tick.x(), Blocks.CHUNK_X),
+                    Math.floorDiv(tick.z(), Blocks.CHUNK_Z)));
+            for (BlockMutation block : pending.mutation().blocks()) {
+                chunks.add(chunkStampKey(Math.floorDiv(block.x(), Blocks.CHUNK_X),
+                        Math.floorDiv(block.z(), Blocks.CHUNK_Z)));
+            }
+        }
+        return Set.copyOf(chunks);
+    }
+
     /** Removes only resident queue state. Durable rows and their original due times remain intact. */
     public void evictChunk(int chunkX, int chunkZ) {
         List<ScheduledTick> evicted = pendingByKey.values().stream()
@@ -1002,6 +1017,13 @@ public final class FinalCarrierTickScheduler {
                 if (plan.disposition() == DueDisposition.EXECUTE) {
                     if (deadlineReached(deadlineNanos)) {
                         return new LaneDrainResult(processed, DrainStatus.DEADLINE);
+                    }
+                    try {
+                        // Availability only: a committed mutation must never be replanned or
+                        // discarded because the now-live block differs from its original type.
+                        liveTypes.canonicalTypeAt(tick.lane(), tick.x(), tick.y(), tick.z());
+                    } catch (UnavailableNeighborhood unavailable) {
+                        return new LaneDrainResult(processed, DrainStatus.UNAVAILABLE);
                     }
                     committedSink.publish(tick, publication.mutation());
                 }

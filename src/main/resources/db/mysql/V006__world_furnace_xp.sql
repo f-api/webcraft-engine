@@ -188,6 +188,26 @@ SET @furnace_xp_column_exists = EXISTS(
 
 -- Full-stack slots are Hibernate-owned and may be absent before its first update.
 -- Accept either the complete exact extension or no extension; reject partial/malformed shapes.
+-- Normalize only exact Hibernate-default text columns; preserve all stack data and shape checks.
+SET @furnace_stack_previous_timeout = @@SESSION.lock_wait_timeout;
+SET SESSION lock_wait_timeout = 30;
+SET @furnace_stack_collation_changes = (
+    SELECT GROUP_CONCAT(CONCAT('MODIFY COLUMN `', column_name, '` ', column_type,
+        ' CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL') ORDER BY ordinal_position SEPARATOR ', ')
+    FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+      AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_0900_ai_ci'
+      AND is_nullable = 'YES' AND column_default IS NULL AND extra = ''
+      AND COALESCE(generation_expression, '') = ''
+      AND ((column_name IN ('input_bucket_mob_data','fuel_bucket_mob_data','output_bucket_mob_data') AND column_type = 'varchar(512)')
+        OR (column_name IN ('input_item_component_data','fuel_item_component_data','output_item_component_data') AND column_type = 'longtext')));
+SET @furnace_stack_collation_sql = IF(@furnace_stack_collation_changes IS NULL, 'SELECT 1',
+    CONCAT('ALTER TABLE `world_furnaces` ', @furnace_stack_collation_changes));
+PREPARE furnace_stack_collation_statement FROM @furnace_stack_collation_sql;
+EXECUTE furnace_stack_collation_statement;
+DEALLOCATE PREPARE furnace_stack_collation_statement;
+SET SESSION lock_wait_timeout = @furnace_stack_previous_timeout;
+
 SET @furnace_stack_column_count = (SELECT COUNT(*) FROM information_schema.columns
     WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
       AND column_name IN ('input_durability', 'input_enchantments', 'input_map_id', 'input_shulker_id', 'input_bucket_mob_data', 'input_item_component_data', 'fuel_durability', 'fuel_enchantments', 'fuel_map_id', 'fuel_shulker_id', 'fuel_bucket_mob_data', 'fuel_item_component_data', 'output_durability', 'output_enchantments', 'output_map_id', 'output_shulker_id', 'output_bucket_mob_data', 'output_item_component_data'));

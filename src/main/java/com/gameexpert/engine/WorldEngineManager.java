@@ -1258,6 +1258,7 @@ public class WorldEngineManager
     }
 
     private WorldRuntime createRuntime(Long worldId, int seed, Difficulty difficulty) {
+        com.gameexpert.cluster.WorldAuthority.requireRuntime(worldId);
         long traceCreateStart = JOIN_STAGE_TRACE ? System.nanoTime() : 0L;
         long traceLegacy = 0L;
         long traceConstructed = 0L;
@@ -1353,6 +1354,17 @@ public class WorldEngineManager
                     (done - traceCreateStart) / 1_000_000L);
         }
         return runtime;
+    }
+
+    /** Quarantine only this root's runtimes; never stop unrelated worlds or another process. */
+    public void abandonClusterAuthority(long root) {
+        for (java.util.Map.Entry<Long, WorldRuntime> entry : List.copyOf(runtimes.entrySet())) {
+            if (com.gameexpert.cluster.WorldAuthority.rootOf(entry.getKey()) != root) continue;
+            entry.getValue().abandonClusterAuthority();
+            closeCanonicalPrefetcher(entry.getKey(), null);
+            canonicalSources.remove(entry.getKey());
+            canonicalSpawns.remove(entry.getKey());
+        }
     }
 
     @PreDestroy

@@ -159,6 +159,8 @@ public class WorldOperations {
     }
 
     public void deleteWorld(Long id, Runnable deleteWorldRow) {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && cluster.deleteWorldOnOwner(id)) return;
 
         if (presenceService.onlineCount(id) > 0 || !engineManager.beginWorldDeletion(id)) {
             throw new ConflictException("WORLD_IN_USE");

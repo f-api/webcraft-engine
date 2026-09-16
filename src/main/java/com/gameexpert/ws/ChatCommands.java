@@ -10,6 +10,8 @@ public class ChatCommands {
     private final WorldEngineManager engineManager;
 
     public String resolve(Long worldId, String nickname, String content) {
+        String remote = com.gameexpert.cluster.ClusterRuntime.resolveEdgeCommand(worldId, nickname, content);
+        if (remote != null) return remote;
         if (content.strip().equals("/pos")) {
             var pose = engineManager.playerPose(worldId, nickname);
             if (pose != null) {

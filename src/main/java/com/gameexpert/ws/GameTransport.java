@@ -300,7 +300,7 @@ public class GameTransport {
     }
 
     /** JSON protocol과 분리된 authoritative chunk-snapshot binary frame을 한 세션에 보냅니다. */
-    private boolean sendBinaryTo(WebSocketSession session, byte[] frame) {
+    public boolean sendBinaryTo(WebSocketSession session, byte[] frame) {
         TickSafetyTelemetry.record(TickSafetyTelemetry.Event.SYNCHRONOUS_SEND_CALL);
         if (frame == null || frame.length > ChunkSnapshotCodec.MAX_TRANSPORT_FRAME_BYTES) {
             log.warn("청크 snapshot binary frame 크기 거부: bytes={}", frame == null ? -1 : frame.length);
@@ -310,6 +310,14 @@ public class GameTransport {
         WebSocketSession target = sendSessions.get(session.getId());
         if (!isActiveSendTarget(session, target)) return false;
         return sendFrame(session, target, new BinaryMessage(frame), "ChunkSnapshot");
+    }
+
+    /** Engine-only dimension control, already fenced/ordered by the authority transport. */
+    public boolean sendAuthorityControl(WebSocketSession session, Object message) {
+        String encoded = serialize(message);
+        WebSocketSession target = sendSessions.get(session.getId());
+        return encoded != null && isActiveSendTarget(session, target)
+                && sendFrameDirect(session, target, new TextMessage(encoded), "AuthorityControl");
     }
 
     /** Welcome을 직접 먼저 보내고, 준비 중 쌓인 모든 프레임을 FIFO로 비운 뒤 일반 송신을 연다. */

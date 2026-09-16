@@ -7684,9 +7684,16 @@ public final class WorldRuntime {
      * chunk cap: overlapping radius-10 neighborhoods are deduplicated, while distant connected players retain
      * their own chunks.  All compaction walks the new union, not accumulated historical queues.
      */
+    private Set<Long> retainedTickPublicationChunks = Set.of();
+    private final Set<Long> pendingPublicationPreparations = ConcurrentHashMap.newKeySet();
+
     void refreshActiveSimulationChunks() {
         if (!ownerTurnMayContinue()) return;
-        if (started && playerChunkCentersUnchanged() && dragonArenaApplied == dragonArenaHeld) return;
+        Set<Long> publicationChunks = finalCarrierTickScheduler == null ? Set.of()
+                : finalCarrierTickScheduler.pendingPublicationChunks();
+        preparePendingPublicationChunks(publicationChunks);
+        if (started && playerChunkCentersUnchanged() && dragonArenaApplied == dragonArenaHeld
+                && publicationChunks.equals(retainedTickPublicationChunks)) return;
         WorldWorkEvent work = architectureWork("neighborhood-rebuild", false, 0, 0, 0L);
         if (architectureTurn != null) architectureTurn.neighborhoodRebuilds++;
         try {
@@ -7697,6 +7704,36 @@ public final class WorldRuntime {
             throw failure;
         } finally {
             WorldWorkEvent.finish(work);
+        }
+    }
+
+    /** A restored or evicted in-flight publication can outlive every nearby player. */
+    private void preparePendingPublicationChunks(Set<Long> chunks) {
+        if (!started) return;
+        for (long key : chunks) {
+            int chunkX = (int) (key >> 32);
+            int chunkZ = (int) key;
+            if (accessor.isChunkResident(chunkX, chunkZ) || !pendingPublicationPreparations.add(key)) continue;
+            try {
+                executeOwned(CHUNK_PREPARERS, () -> {
+                    try {
+                        TerrainAccessor.PreparedChunk prepared = accessor.prepareDetachedChunkForActivation(chunkX, chunkZ);
+                        enqueuePersistenceCompletion(() -> {
+                            try {
+                                if (ownerTurnMayContinue() && finalCarrierTickScheduler.pendingPublicationChunks().contains(key)) {
+                                    accessor.adoptPreparedChunkForSnapshot(prepared);
+                                }
+                            } finally { pendingPublicationPreparations.remove(key); }
+                        }, () -> pendingPublicationPreparations.remove(key));
+                    } catch (RuntimeException failure) {
+                        pendingPublicationPreparations.remove(key);
+                        log.warn("Pending tick publication source preparation failed: world={} chunk={},{}",
+                                worldId, chunkX, chunkZ, failure);
+                    }
+                });
+            } catch (java.util.concurrent.RejectedExecutionException full) {
+                pendingPublicationPreparations.remove(key);
+            }
         }
     }
 
@@ -7737,6 +7774,9 @@ public final class WorldRuntime {
         } else {
             next.addAll(testSimulationChunks);
         }
+        retainedTickPublicationChunks = finalCarrierTickScheduler == null ? Set.of()
+                : finalCarrierTickScheduler.pendingPublicationChunks();
+        next.addAll(retainedTickPublicationChunks);
         Set<Long> frozen = Set.copyOf(next);
         boolean bedRetentionChanged = started && !nextBedChunks.equals(activePlayerBedChunks);
         if (started) {
@@ -12998,7 +13038,14 @@ public final class WorldRuntime {
 
     /** Volatile fail-closed boundary for every scheduled owner phase. */
     boolean ownerTurnMayContinue() {
-        return !disposed && terminalPhase == TerminalPhase.RUNNING;
+        return !disposed && terminalPhase == TerminalPhase.RUNNING
+                && com.gameexpert.cluster.WorldAuthority.permitsRuntime(worldId);
+    }
+
+    private final AtomicBoolean clusterAuthorityAbandoned = new AtomicBoolean();
+
+    void abandonClusterAuthority() {
+        if (clusterAuthorityAbandoned.compareAndSet(false, true)) abortTerminal();
     }
 
     private void markOwnerThread() {
@@ -13616,6 +13663,20 @@ public final class WorldRuntime {
             generatedCushionPersistencePublications.clear();
         }
         publishTerminalOutcome(TerminalOutcomeKind.ABORTED);
+        if (clusterAuthorityAbandoned.get()) {
+            Runnable cleanup;
+            ScheduledExecutorService ownedExecutor;
+            synchronized (this) {
+                cleanup = onDispose;
+                onDispose = null;
+                ownedExecutor = executor;
+            }
+            // All subsequent persistence callbacks see ABORTED and the database write fence.
+            // No final cached snapshot may be written after another incarnation took ownership.
+            if (cleanup != null) cleanup.run();
+            if (ownedExecutor != null) ownedExecutor.shutdown();
+            ctx.broadcaster().forgetWorld(worldId);
+        }
     }
 
     public boolean isEmpty() {

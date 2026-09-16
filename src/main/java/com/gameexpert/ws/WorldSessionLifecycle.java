@@ -44,6 +44,11 @@ public class WorldSessionLifecycle {
     }
 
     private boolean release(WebSocketSession session, boolean graceful) {
+        com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
+        if (cluster != null && cluster.isPhysical(session)) {
+            cluster.releasePhysical(session, graceful);
+            return true;
+        }
         Long worldId = (Long) session.getAttributes().get(ATTR_WORLD_ID);
         String nickname = (String) session.getAttributes().get(ATTR_NICKNAME);
         if (worldId == null || nickname == null) {
@@ -69,7 +74,8 @@ public class WorldSessionLifecycle {
             log.error("퇴장 상태 확정 또는 저장 제출 실패: world={}, nickname={}",
                     worldId, nickname, exception);
         } finally {
-            removed = cleanup.remove(worldId, nickname, session);
+            removed = registry instanceof com.gameexpert.cluster.AuthoritySessions owned && owned.enabled()
+                    ? owned.remove(worldId, nickname, session) : cleanup.remove(worldId, nickname, session);
         }
         if (removed == null) {
             broadcaster.forget(session);
