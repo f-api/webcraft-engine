@@ -97,6 +97,10 @@ public final class ClusterRuntime implements AutoCloseable {
     }
     private static volatile ClusterRuntime active;
     private static final ThreadLocal<Boolean> AUTHORITY_DISPATCH = new ThreadLocal<>();
+    /** Internal control flow: a chat command from a retired dimension must not be saved or relayed. */
+    static final class CommandCancelledException extends RuntimeException {
+        CommandCancelledException() { super("Command belongs to an unavailable dimension session"); }
+    }
     private final org.springframework.context.ApplicationContext context;
     private final WorldAuthority authority;
     private final AuthoritySessions sessions;
@@ -515,6 +519,10 @@ public final class ClusterRuntime implements AutoCloseable {
                 catch(RuntimeException failure) { removeQuery(sequence); throw failure; }
             }
             try { return reply.get(5,TimeUnit.SECONDS); }
+            catch(ExecutionException failure) {
+                if(failure.getCause() instanceof CommandCancelledException cancelled) throw cancelled;
+                throw new IllegalStateException("Authoritative command query failed",failure);
+            }
             catch(Exception failure) { throw new IllegalStateException("Authoritative command query failed",failure); }
             finally { removeQuery(sequence); }
         }
@@ -525,7 +533,10 @@ public final class ClusterRuntime implements AutoCloseable {
             synchronized(queryLock) {
                 if(queryFailure!=null || closed.get()) return;
                 CompletableFuture<String> reply=queries.get(packet.sequence());
-                if(reply!=null) reply.complete(packet.payload());
+                if(reply!=null) {
+                    if(packet.code()==409) reply.completeExceptionally(new CommandCancelledException());
+                    else reply.complete(packet.payload());
+                }
             }
         }
         void failQueries(RuntimeException failure) {
@@ -696,13 +707,27 @@ public final class ClusterRuntime implements AutoCloseable {
                         finally { AUTHORITY_DISPATCH.remove(); }
                     }
                     case "command" -> {
-                        if(!joined || packet.world()!=world()) return;
-                        AUTHORITY_DISPATCH.set(true);
-                        try {
-                            String result=commands.getObject().resolve(world(),
-                                    (String)currentSession().getAttributes().get(ATTR_NICKNAME),packet.payload());
-                            emit("result",packet.sequence(),result,false,0);
-                        } finally { AUTHORITY_DISPATCH.remove(); }
+                        WebSocketSession target=currentSession();
+                        if(!joined || target==null) {
+                            emit("result",packet.sequence(),"",false,409);
+                            return;
+                        }
+                        // beginTransfer uses this same monitor. Resolve against one ready generation,
+                        // or explicitly cancel so the edge releases its pending transition frame.
+                        synchronized(target) {
+                            if(packet.world()!=(Long)target.getAttributes().get(ATTR_WORLD_ID)
+                                    || !target.isOpen() || currentSession()!=target
+                                    || target instanceof DimensionSession dimension && !dimension.inputReady()) {
+                                emit("result",packet.sequence(),"",false,409);
+                                return;
+                            }
+                            AUTHORITY_DISPATCH.set(true);
+                            try {
+                                String result=commands.getObject().resolve(packet.world(),
+                                        (String)target.getAttributes().get(ATTR_NICKNAME),packet.payload());
+                                emit("result",packet.sequence(),result,false,0);
+                            } finally { AUTHORITY_DISPATCH.remove(); }
+                        }
                     }
                     case "close" -> terminate(new CloseStatus(packet.code()==0?1000:packet.code()));
                     default -> throw new IllegalArgumentException("Unexpected authority envelope");

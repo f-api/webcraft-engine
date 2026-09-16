@@ -109,6 +109,92 @@ class ClusterCommandReplyTest {
         order.verify(transport).sendTo(eq(edge.current), argThat((tools.jackson.databind.JsonNode node) -> node.path("value").asInt() == 2));
     }
 
+    @Test
+    void actualQueryCompletesWhileCallerHoldsTransportLock() throws Exception {
+        synchronized (edge.queryLock) { edge.queries.clear(); }
+        when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), any(Object[].class)))
+                .thenAnswer(invocation -> {
+                    ClusterRuntime.Packet request = new ObjectMapper().readValue(
+                            (String) invocation.getArgument(2), ClusterRuntime.Packet.class);
+                    receive(packet("result", request.sequence(), "position"));
+                    return 1L;
+                });
+        synchronized (edge.transportLock) {
+            blockFrame();
+            assertEquals("position", edge.query("/pos"));
+        }
+        synchronized (edge.queryLock) { assertTrue(edge.queries.isEmpty()); }
+    }
+
+    @Test
+    void concurrentQueriesCorrelateOutOfOrderReplies() throws Exception {
+        synchronized (edge.queryLock) { edge.queries.clear(); }
+        BlockingQueue<ClusterRuntime.Packet> sent = new LinkedBlockingQueue<>();
+        when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), any(Object[].class)))
+                .thenAnswer(invocation -> {
+                    sent.add(new ObjectMapper().readValue((String) invocation.getArgument(2), ClusterRuntime.Packet.class));
+                    return 1L;
+                });
+        try (ExecutorService workers = Executors.newVirtualThreadPerTaskExecutor()) {
+            List<Future<String>> calls = java.util.stream.IntStream.range(0, 32)
+                    .mapToObj(i -> workers.submit(() -> edge.query("query-" + i))).toList();
+            java.util.ArrayList<ClusterRuntime.Packet> requests = new java.util.ArrayList<>();
+            for (int i = 0; i < 32; i++) {
+                ClusterRuntime.Packet request = sent.poll(2, TimeUnit.SECONDS);
+                assertNotNull(request);
+                requests.add(request);
+            }
+            java.util.Collections.reverse(requests);
+            requests.forEach(request -> receive(packet("result", request.sequence(), request.payload())));
+            for (int i = 0; i < 32; i++) assertEquals("query-" + i, calls.get(i).get(1, TimeUnit.SECONDS));
+        }
+        synchronized (edge.queryLock) { assertTrue(edge.queries.isEmpty()); }
+    }
+
+    @Test
+    void failedSendDoesNotLeakPendingQuery() {
+        synchronized (edge.queryLock) { edge.queries.clear(); }
+        when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), any(Object[].class)))
+                .thenThrow(new IllegalStateException("transport unavailable"));
+        assertThrows(IllegalStateException.class, () -> edge.query("/pos"));
+        synchronized (edge.queryLock) { assertTrue(edge.queries.isEmpty()); }
+    }
+
+    @Test
+    void localTerminationReleasesWaitingQueryAndRejectsNewRequests() throws Exception {
+        synchronized (edge.queryLock) { edge.queries.clear(); }
+        CountDownLatch sent = new CountDownLatch(1);
+        when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), any(Object[].class)))
+                .thenAnswer(invocation -> { sent.countDown(); return 1L; });
+        try (ExecutorService worker = Executors.newVirtualThreadPerTaskExecutor()) {
+            Future<String> call = worker.submit(() -> edge.query("/pos"));
+            assertTrue(sent.await(2, TimeUnit.SECONDS));
+            edge.terminate(org.springframework.web.socket.CloseStatus.NORMAL);
+            assertThrows(ExecutionException.class, () -> call.get(1, TimeUnit.SECONDS));
+            assertThrows(IllegalStateException.class, () -> edge.query("/pos"));
+        }
+        synchronized (edge.queryLock) { assertTrue(edge.queries.isEmpty()); }
+    }
+
+    @Test
+    void remoteCloseReleasesActualQueryWhileFrameIsBlocked() throws Exception {
+        synchronized (edge.queryLock) { edge.queries.clear(); }
+        CountDownLatch sent = new CountDownLatch(1);
+        when(redis.execute(any(org.springframework.data.redis.core.script.RedisScript.class), anyList(), any(Object[].class)))
+                .thenAnswer(invocation -> { sent.countDown(); return 1L; });
+        try (ExecutorService worker = Executors.newVirtualThreadPerTaskExecutor()) {
+            synchronized (edge.transportLock) {
+                blockFrame();
+                Future<String> call = worker.submit(() -> edge.query("/pos"));
+                assertTrue(sent.await(2, TimeUnit.SECONDS));
+                receive(packet("closed", 0L, ""));
+                assertThrows(ExecutionException.class, () -> call.get(1, TimeUnit.SECONDS));
+                assertThrows(IllegalStateException.class, () -> edge.query("/pos"));
+                synchronized (edge.queryLock) { assertTrue(edge.queries.isEmpty()); }
+            }
+        }
+    }
+
     private void blockFrame() throws Exception {
         receive(packet("frame", 1L, "{\"type\":\"time\"}"));
         Thread worker = (Thread) ReflectionTestUtils.getField(edge.mailbox, "worker");
