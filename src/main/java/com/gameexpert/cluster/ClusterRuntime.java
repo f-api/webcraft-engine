@@ -208,6 +208,11 @@ public final class ClusterRuntime implements AutoCloseable {
             Edge edge=wireEdges.get(packet.id());
             if (edge == null || !edge.owner.node().equals(packet.from()) || edge.owner.root()!=packet.root()
                     || edge.owner.epoch()!=packet.epoch()) return;
+            // A local /pos handler holds transportLock while awaiting this read-only reply.
+            // Completing it behind a frame that needs that lock would stall both callers.
+            if (packet.kind().equals("result")) { edge.completeQuery(packet); return; }
+            if (packet.kind().equals("closed")) edge.failQueries(new IllegalStateException(
+                    "Engine connection closed: " + packet.code()));
             if (!edge.mailbox.offer(() -> edge.accept(packet))) edge.terminate(new CloseStatus(1013, "ENGINE_EDGE_OVERFLOW"));
             return;
         }
@@ -466,7 +471,9 @@ public final class ClusterRuntime implements AutoCloseable {
         final AtomicBoolean closed=new AtomicBoolean();
         final CompletableFuture<Void> opened=new CompletableFuture<>();
         final CompletableFuture<Void> welcome=new CompletableFuture<>();
-        final ConcurrentMap<Long,CompletableFuture<String>> queries=new ConcurrentHashMap<>();
+        final Object queryLock=new Object();
+        final Map<Long,CompletableFuture<String>> queries=new HashMap<>();
+        private RuntimeException queryFailure;
         final SerialMailbox mailbox;
         volatile EdgeSession current;
         volatile boolean ready;
@@ -498,15 +505,35 @@ public final class ClusterRuntime implements AutoCloseable {
             CompletableFuture<String> reply=new CompletableFuture<>();
             long sequence;
             synchronized(sendLock) {
-                if(closed.get()) throw new IllegalStateException("Engine edge is closed");
-                sequence=++requestSequence; queries.put(sequence,reply);
+                synchronized(queryLock) {
+                    if(queryFailure!=null) throw queryFailure;
+                    if(closed.get()) throw new IllegalStateException("Engine edge is closed");
+                    sequence=++requestSequence; queries.put(sequence,reply);
+                }
                 try { push(owner.node(),new Packet("command",ClusterIdentity.NODE,wire,owner.root(),owner.epoch(),
                         sequence,world(),content,false,0)); }
-                catch(RuntimeException failure) { queries.remove(sequence); throw failure; }
+                catch(RuntimeException failure) { removeQuery(sequence); throw failure; }
             }
             try { return reply.get(5,TimeUnit.SECONDS); }
             catch(Exception failure) { throw new IllegalStateException("Authoritative command query failed",failure); }
-            finally { queries.remove(sequence); }
+            finally { removeQuery(sequence); }
+        }
+        private void removeQuery(long sequence) {
+            synchronized(queryLock) { queries.remove(sequence); }
+        }
+        void completeQuery(Packet packet) {
+            synchronized(queryLock) {
+                if(queryFailure!=null || closed.get()) return;
+                CompletableFuture<String> reply=queries.get(packet.sequence());
+                if(reply!=null) reply.complete(packet.payload());
+            }
+        }
+        void failQueries(RuntimeException failure) {
+            synchronized(queryLock) {
+                if(queryFailure==null) queryFailure=failure;
+                queries.values().forEach(reply->reply.completeExceptionally(queryFailure));
+                queries.clear();
+            }
         }
         void accept(Packet packet) {
             if(closed.get()) return;
@@ -524,10 +551,7 @@ public final class ClusterRuntime implements AutoCloseable {
                     opened.complete(null);
                 }
                 case "frame" -> frame(packet);
-                case "result" -> {
-                    CompletableFuture<String> reply=queries.get(packet.sequence());
-                    if(reply!=null) reply.complete(packet.payload());
-                }
+                case "result" -> completeQuery(packet);
                 case "closed" -> terminate(new CloseStatus(packet.code(),"ENGINE_REMOTE_CLOSED"));
                 default -> throw new IllegalArgumentException("Unexpected edge envelope");
             }
@@ -590,11 +614,13 @@ public final class ClusterRuntime implements AutoCloseable {
         }
         void terminate(CloseStatus status) {
             if(!closed.compareAndSet(false,true)) return;
+            IllegalStateException failure=new IllegalStateException("Engine connection closed: "+status.getCode());
+            failQueries(failure);
             physicalEdges.remove(physical.getId(),this); wireEdges.remove(wire,this);
             synchronized(sendLock) {
                 try { push(owner.node(),new Packet("close",ClusterIdentity.NODE,wire,owner.root(),owner.epoch(),
                         ++requestSequence,world(),"",false,status.getCode())); }
-                catch(RuntimeException failure) { log.debug("Owner close deferred to engine connection health timeout",failure); }
+                catch(RuntimeException closeFailure) { log.debug("Owner close deferred to engine connection health timeout",closeFailure); }
             }
             // Never acquire the session monitor while holding transportLock: a local
             // chat handler may hold that monitor while sending its physical frame.
@@ -604,9 +630,7 @@ public final class ClusterRuntime implements AutoCloseable {
                         (String)target.getAttributes().get(ATTR_NICKNAME),target);
                 transport.getObject().forget(target);
             }
-            IllegalStateException failure=new IllegalStateException("Engine connection closed: "+status.getCode());
             opened.completeExceptionally(failure); welcome.completeExceptionally(failure);
-            queries.values().forEach(reply->reply.completeExceptionally(failure)); queries.clear();
             try { if(physical.isOpen()) physical.close(status); }
             catch(IOException|RuntimeException closeFailure) { log.debug("Physical edge close failed",closeFailure); }
             mailbox.close();
