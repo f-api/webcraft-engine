@@ -20,9 +20,9 @@ This deliberately changes new map-declaration witness receipts; it does not clai
 - Post-restart active-runtime logs had zero ERROR lines and zero snapshot-bound errors at inspection. Tick-budget warnings occurred; this was functional verification, not performance acceptance. Reusing the registered nickname produced expected HTTP 409 responses handled by the login UI.
 - Browser nativePointerLocked=false and forbidden=[]; owned browser and infrastructure cleaned up after evidence collection.
 
-## Known remaining scope
+## Scope at the time of this verification
 
-The separate late located-map loot preparation/historical replay path still loads a full-world reference snapshot and retains its aggregate cap. It was not exercised or repaired here. This change removes the cumulative cap from terrain exploration/generation, not every world operation. Do not claim all gameplay is globally unbounded or that map-open replay was integration-tested.
+At this checkpoint, the separate late located-map loot preparation/historical replay path still loaded a full-world reference snapshot and retained its aggregate cap. See [the subsequent streaming review](snapshot-streaming-review.md) for its removal. It was not exercised or repaired here. This change removes the cumulative cap from terrain exploration/generation, not every world operation. Do not claim all gameplay is globally unbounded or that map-open replay was integration-tested.
 
 ## Artifacts
 

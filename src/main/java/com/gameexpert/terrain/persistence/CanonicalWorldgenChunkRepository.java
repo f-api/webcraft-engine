@@ -18,6 +18,23 @@ public interface CanonicalWorldgenChunkRepository
     @Query("select c.worldIdentity as worldIdentity, c.chunkX as chunkX, c.chunkZ as chunkZ, c.structureCarrier as structureCarrier from CanonicalWorldgenChunk c where c.worldId = :worldId order by c.chunkX, c.chunkZ")
     List<StructureRow> findStructureRows(@Param("worldId") long worldId);
 
+    interface StructureMetadata {
+        Long getId(); String getWorldIdentity(); int getChunkX(); int getChunkZ(); int getCarrierLength();
+    }
+    @Query(value = "select id as id, world_identity as worldIdentity, chunk_x as chunkX, chunk_z as chunkZ, octet_length(structure_carrier) as carrierLength from canonical_worldgen_chunks where world_id = :worldId order by chunk_x, chunk_z", nativeQuery = true)
+    List<StructureMetadata> findStructureMetadata(@Param("worldId") long worldId);
+    @Query(value = "select id as id, world_identity as worldIdentity, chunk_x as chunkX, chunk_z as chunkZ, octet_length(structure_carrier) as carrierLength from canonical_worldgen_chunks where world_id = :worldId and chunk_x = :x and chunk_z = :z", nativeQuery = true)
+    Optional<StructureMetadata> findStructureMetadataAt(@Param("worldId") long worldId, @Param("x") int x, @Param("z") int z);
+    interface StructureCarrierRow {
+        byte[] getStructureCarrier();
+    }
+    @Query("select c.structureCarrier as structureCarrier from CanonicalWorldgenChunk c where c.id = :id")
+    Optional<StructureCarrierRow> findStructureCarrierRow(@Param("id") long id);
+
+    default Optional<byte[]> findStructureCarrier(long id) {
+        return findStructureCarrierRow(id).map(StructureCarrierRow::getStructureCarrier);
+    }
+
     Optional<CanonicalWorldgenChunk> findByWorldIdAndChunkXAndChunkZ(long worldId, int chunkX,
             int chunkZ);
     /**

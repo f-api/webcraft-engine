@@ -45,9 +45,11 @@ public final class LateCanonicalLootPreparationService {
     private final WorldStructureReferenceClaimRepository claims;
     private final WorldLootReferenceSnapshotRepository snapshots;
     private final TransactionTemplate readSnapshot;
+    private final WorldLootReferencePageRepository pages;
     public LateCanonicalLootPreparationService(WorldStore worlds,CanonicalWorldgenStore canonical,
             WorldCanonicalLootAssignmentRepository assignments,WorldStructureReferenceClaimRepository claims,
-            WorldLootReferenceSnapshotRepository snapshots,PlatformTransactionManager transactions){
+            WorldLootReferenceSnapshotRepository snapshots, WorldLootReferencePageRepository pages, PlatformTransactionManager transactions){
+        this.pages=Objects.requireNonNull(pages);
         this.worlds=Objects.requireNonNull(worlds);this.canonical=Objects.requireNonNull(canonical);
         this.assignments=Objects.requireNonNull(assignments);this.claims=Objects.requireNonNull(claims);this.snapshots=Objects.requireNonNull(snapshots);
         readSnapshot=new TransactionTemplate(Objects.requireNonNull(transactions));readSnapshot.setReadOnly(true);
@@ -58,11 +60,11 @@ public final class LateCanonicalLootPreparationService {
             boolean playerOverride,ChunkProductSource generation){
         if(TransactionSynchronizationManager.isActualTransactionActive())throw new IllegalStateException("late loot generation must precede database settlement");
         if(playerOverride)return null;
-        var sourceProfile=Objects.requireNonNull(generation).generationProfile();
-        var world=worlds.findById(worldId).orElseThrow(()->new IllegalStateException("loot world missing"));
-        var profile=world.generationProfile();
+        WorldGenerationProfile sourceProfile=Objects.requireNonNull(generation).generationProfile();
+        com.gameexpert.api.persistence.WorldAccess world=worlds.findById(worldId).orElseThrow(()->new IllegalStateException("loot world missing"));
+        WorldGenerationProfile profile=world.generationProfile();
         if(!profile.equals(sourceProfile))throw new IllegalStateException("loot generator belongs to another profile");
-        var assignment=assignments.findByWorldIdAndPosXAndPosYAndPosZ(worldId,x,y,z).orElse(null);
+        WorldCanonicalLootAssignment assignment=assignments.findByWorldIdAndPosXAndPosYAndPosZ(worldId,x,y,z).orElse(null);
         if(assignment==null||assignment.getStatus()==WorldCanonicalLootAssignment.Status.REJECTED||assignment.getContainerKind()!=kind)return null;
         if(assignment.getWorldSeed()!=world.getSeed())throw new IllegalStateException("loot world seed differs");
         NeutralFinalChunk source=source(assignment);
@@ -70,21 +72,24 @@ public final class LateCanonicalLootPreparationService {
         if(assignment.getLocatedProductionContext().targets().isEmpty())return null;
         if(assignment.getStatus()==WorldCanonicalLootAssignment.Status.RESOLVED){
             if(assignment.getLateOutcomePayload()==null)throw new IllegalStateException("new-profile map outcome lacks replay input");
-            var saved=snapshots.findByWorldIdAndBaselineIdAndSnapshotIdentity(worldId,profile.getBaselineId(),assignment.getLateSnapshotIdentity())
+            WorldLootReferenceSnapshot saved=snapshots.findByWorldIdAndBaselineIdAndSnapshotIdentity(worldId,profile.getBaselineId(),assignment.getLateSnapshotIdentity())
                     .orElseThrow(()->new IllegalStateException("late loot replay membership missing"));
-            var current=canonical.structureSnapshot(worldId,profile);
-            var historical=LateLootReferenceCodec.restore(saved,current);
-            var before=LateLootReferenceCodec.readClaims(saved.getClaimsPayload());
-            var outcome=execute(source,assignment,historical,before);
+            CanonicalStructureSnapshot historical = LateLootReferenceCodec.restore(saved, worldId, profile,
+                    payload(saved, "membership", saved.getMembershipPayload()),
+                    payload(saved, "claims", saved.getClaimsPayload()),
+                    (chunkX, chunkZ) -> canonical.structureRow(worldId, profile, chunkX, chunkZ));
+            List<LateLootOutcome.Claim> before = LateLootReferenceCodec.readClaims(
+                    payload(saved, "claims", saved.getClaimsPayload()));
+            LateLootOutcome outcome=execute(source,assignment,historical,before);
             if(outcome.needsStructure()||!Arrays.equals(outcome.encoded(),assignment.getLateOutcomePayload()))
                 throw new IllegalStateException("late loot did not replay its exact historical producer outcome");
             return new Prepared(assignment,historical,before,outcome);
         }
         if(!Objects.requireNonNull(generation).generationProfile().equals(profile))throw new IllegalStateException("loot preparation generator profile differs");
-        var requested=new HashSet<Long>();
+        Set<Long> requested=new HashSet<Long>();
         for(int attempt=0;attempt<32;attempt++){
             Input input=Objects.requireNonNull(readSnapshot.execute(status->new Input(canonical.structureSnapshot(worldId,profile),currentClaims(worldId,profile))));
-            var outcome=execute(source,assignment,input.snapshot,input.claims);
+            LateLootOutcome outcome=execute(source,assignment,input.snapshot,input.claims);
             if(!outcome.needsStructure())return new Prepared(assignment,input.snapshot,input.claims,outcome);
             int neededX=outcome.neededChunkX(),neededZ=outcome.neededChunkZ();
             long key=((long)neededX<<32)^(neededZ&0xffffffffL);
@@ -96,7 +101,7 @@ public final class LateCanonicalLootPreparationService {
     }
     public void lockWorldJoiningTransaction(long worldId,Prepared prepared){
         requireTransaction();
-        var world=worlds.findByIdForUpdate(worldId).orElseThrow(()->new IllegalStateException("loot world missing"));
+        com.gameexpert.api.persistence.WorldAccess world=worlds.findByIdForUpdate(worldId).orElseThrow(()->new IllegalStateException("loot world missing"));
         if(worldId!=prepared.snapshot.worldId()||!world.generationProfile().equals(prepared.snapshot.profile()))
             throw new IllegalStateException("prepared loot world/profile differs");
     }
@@ -109,7 +114,7 @@ public final class LateCanonicalLootPreparationService {
         if(assignment.getStatus()==WorldCanonicalLootAssignment.Status.RESOLVED){
             if(!Arrays.equals(assignment.getLateOutcomePayload(),prepared.outcome.encoded()))throw new Retry("another loot outcome settled first");
         }else{
-            var now=canonical.structureSnapshot(assignment.getWorldId(),prepared.snapshot.profile());
+            CanonicalStructureSnapshot now=canonical.structureSnapshot(assignment.getWorldId(),prepared.snapshot.profile());
             String epoch=LateLootReferenceCodec.epoch(now.receipt(),currentClaims(assignment.getWorldId(),prepared.snapshot.profile()));
             if(!epoch.equals(prepared.outcome.referenceEpoch()))throw new Retry("structure references changed after preparation");
         }
@@ -117,30 +122,56 @@ public final class LateCanonicalLootPreparationService {
     }
     public void stageJoiningTransaction(WorldCanonicalLootAssignment assignment,Prepared prepared){
         requireTransaction();
-        var profile=prepared.snapshot.profile();long worldId=assignment.getWorldId();
-        byte[] membership=LateLootReferenceCodec.membership(prepared.snapshot),before=LateLootReferenceCodec.claims(prepared.beforeClaims);
-        String identity=prepared.outcome.referenceEpoch(),claimHash=LateLootReferenceCodec.sha256(before);
-        var existing=snapshots.findByWorldIdAndBaselineIdAndSnapshotIdentity(worldId,profile.getBaselineId(),identity).orElse(null);
-        if(existing==null)snapshots.save(new WorldLootReferenceSnapshot(worldId,profile.getBaselineId(),identity,prepared.snapshot.receipt(),claimHash,membership,before));
-        else if(!existing.matchesEvidence(prepared.snapshot.receipt(),claimHash,membership,before))throw new IllegalStateException("immutable loot replay snapshot differs");
-        for(var claim:prepared.outcome.claims()){
-            var row=canonical.find(worldId,claim.originChunkX(),claim.originChunkZ());
+        WorldGenerationProfile profile=prepared.snapshot.profile();long worldId=assignment.getWorldId();
+        String identity = prepared.outcome.referenceEpoch();
+        String claimHash = LateLootReferenceCodec.claimsFingerprint(prepared.beforeClaims);
+        WorldLootReferenceSnapshot existing = snapshots.findByWorldIdAndBaselineIdAndSnapshotIdentity(
+                worldId, profile.getBaselineId(), identity).orElse(null);
+        byte[] membership = writePayload(worldId, profile.getBaselineId(), identity, "membership",
+                LateLootReferenceCodec.MEMBERSHIP_MAGIC,
+                output -> LateLootReferenceCodec.writeMembership(prepared.snapshot, output), existing == null);
+        byte[] before = writePayload(worldId, profile.getBaselineId(), identity, "claims",
+                LateLootReferenceCodec.CLAIMS_MAGIC,
+                output -> LateLootReferenceCodec.writeClaims(prepared.beforeClaims, output), existing == null);
+        if (existing == null) {
+            snapshots.save(new WorldLootReferenceSnapshot(worldId, profile.getBaselineId(), identity,
+                    prepared.snapshot.receipt(), claimHash, membership, before));
+        } else if (!existing.matchesEvidence(prepared.snapshot.receipt(), claimHash, membership, before)) {
+            throw new IllegalStateException("immutable loot replay snapshot differs");
+        }
+        for(LateLootOutcome.Claim claim:prepared.outcome.claims()){
+            CanonicalWorldgenStore.CanonicalChunkSnapshot row=canonical.find(worldId,claim.originChunkX(),claim.originChunkZ());
             if(row==null||!row.commit().worldIdentity().equals(profile.getBaselineId())
                     ||!LateLootReferenceCodec.sha256(row.commit().structureCarrier()).equals(claim.structureRowSha256()))
                 throw new IllegalStateException("claim no longer matches its verified canonical origin row");
             String fingerprint=LateLootReferenceCodec.sha256(row.commit().fingerprint());
-            var settled=claims.findByWorldIdAndBaselineIdAndStructureIdAndOriginChunkXAndOriginChunkZ(worldId,profile.getBaselineId(),claim.structureId(),claim.originChunkX(),claim.originChunkZ()).orElse(null);
+            WorldStructureReferenceClaim settled=claims.findByWorldIdAndBaselineIdAndStructureIdAndOriginChunkXAndOriginChunkZ(worldId,profile.getBaselineId(),claim.structureId(),claim.originChunkX(),claim.originChunkZ()).orElse(null);
             if(settled==null)claims.save(new WorldStructureReferenceClaim(worldId,profile.getBaselineId(),claim.structureId(),claim.originChunkX(),claim.originChunkZ(),fingerprint,claim.structureRowSha256()));
             else if(!settled.matchesEvidence(fingerprint,claim.structureRowSha256()))throw new IllegalStateException("settled structure claim evidence differs");
         }
         assignment.stageLateOutcome(identity,prepared.outcome);
     }
+    private java.io.InputStream payload(WorldLootReferenceSnapshot saved, String kind, byte[] envelope) {
+        return SegmentedReferencePayload.open(envelope, number -> pages.payload(saved.getWorldId(),
+                saved.getBaselineId(), saved.getSnapshotIdentity(), kind, number)
+                .orElseThrow(() -> new IllegalStateException("immutable loot replay page missing")));
+    }
+
+    private byte[] writePayload(long worldId, String baseline, String identity, String kind,
+            int magic, SegmentedReferencePayload.Writer writer, boolean persist) {
+        int[] number = {0};
+        return SegmentedReferencePayload.write(magic, writer, bytes -> {
+            if (persist) pages.insertPage(worldId, baseline, identity, kind, number[0], bytes);
+            number[0]++;
+        });
+    }
+
     private List<LateLootOutcome.Claim> currentClaims(long worldId,WorldGenerationProfile profile){
         return claims.findAllByWorldIdAndBaselineId(worldId,profile.getBaselineId()).stream()
                 .map(row->new LateLootOutcome.Claim(row.getStructureId(),row.getOriginChunkX(),row.getOriginChunkZ(),row.getStructureRowSha256())).toList();
     }
     private NeutralFinalChunk source(WorldCanonicalLootAssignment assignment){
-        var source=canonical.find(assignment.getWorldId(),assignment.getChunkX(),assignment.getChunkZ());
+        CanonicalWorldgenStore.CanonicalChunkSnapshot source=canonical.find(assignment.getWorldId(),assignment.getChunkX(),assignment.getChunkZ());
         if(source==null)throw new IllegalStateException("loot producer source missing");return source.commit().semanticFinalChunk();
     }
     private LateLootOutcome execute(NeutralFinalChunk source,WorldCanonicalLootAssignment assignment,

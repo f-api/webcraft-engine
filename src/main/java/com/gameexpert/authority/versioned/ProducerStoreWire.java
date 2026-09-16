@@ -47,25 +47,16 @@ public final class ProducerStoreWire {
     public static com.gameexpert.terrain.mc.loot.Mc263LocatedMapAuthority.StructureReferenceSnapshot referencesRows(
             IsolatedProducerSession session,WorldGenerationProfile profile,long world,
             List<CanonicalStructureSnapshot.Row> snapshots){
-        try{
-            var ordered=new ArrayList<>(snapshots);
-            ordered.sort(Comparator.comparingInt(CanonicalStructureSnapshot.Row::chunkX).thenComparingInt(CanonicalStructureSnapshot.Row::chunkZ));
-            var bytes=new ByteArrayOutputStream();var out=header(bytes,profile,6);out.writeLong(world);out.writeInt(ordered.size());
-            for(var row:ordered){out.writeInt(row.chunkX());out.writeInt(row.chunkZ());write(out,row.carrier());}
-            out.flush();
-            try(var in=response(session.exchange(bytes.toByteArray()))){
-                String receipt=in.readUTF();if(!receipt.matches("[0-9a-f]{64}"))throw new IOException("invalid structure snapshot receipt");int count=in.readInt();
-                if(count<0||count>1_000_000||count*14L>in.available())throw new IOException("invalid structure reference count");
-                Map<String,Integer> references=new HashMap<>();
-                for(int i=0;i<count;i++){String key=in.readUTF();int x=in.readInt(),z=in.readInt(),value=in.readInt();if(value<0||references.put(key+"\0"+x+"\0"+z,value)!=null)throw new IOException("duplicate structure reference");}
-                if(in.available()!=0)throw new IOException("trailing structure reference response");
-                Map<String,Integer> frozen=Map.copyOf(references);
-                return new com.gameexpert.terrain.mc.loot.Mc263LocatedMapAuthority.StructureReferenceSnapshot(){
-                    @Override public String receipt(){return receipt;}
-                    @Override public int references(String key,int x,int z){return frozen.getOrDefault(key+"\0"+x+"\0"+z,0);}
-                };
+        List<CanonicalStructureSnapshot.Row> ordered = snapshots.stream()
+                .sorted(Comparator.comparingInt(CanonicalStructureSnapshot.Row::chunkX)
+                        .thenComparingInt(CanonicalStructureSnapshot.Row::chunkZ)).toList();
+        synchronized (session) {
+            try (ProducerSnapshotUpload upload = new ProducerSnapshotUpload(session, profile, world, ordered)) {
+                return upload.references();
+            } catch (IOException malformed) {
+                throw new IllegalArgumentException("invalid structure snapshot transport", malformed);
             }
-        }catch(IOException malformed){throw new IllegalArgumentException("invalid structure snapshot transport",malformed);}
+        }
     }
     static DataOutputStream header(ByteArrayOutputStream bytes,WorldGenerationProfile profile,int operation)throws IOException{
         WorldGenerationProfiles.requireSupported(profile);var out=new DataOutputStream(bytes);out.writeInt(0x57504731);out.writeByte(1);

@@ -57,6 +57,26 @@ tasks.register('prepareProducerBundle') {
         } finally { temporary.delete() }
     }
 }
+def adapterResources = layout.buildDirectory.dir('worker-adapter-resources')
+tasks.register('prepareWorkerAdapter', Exec) {
+    dependsOn tasks.named('prepareProducerBundle')
+    def compiler = javaToolchains.compilerFor { languageVersion = JavaLanguageVersion.of(21) }
+    inputs.files(fileTree('src/main/java/com/gameexpert/authority/versioned/worker') { include '*.java' })
+    inputs.file('scripts/package-worker-adapter.py')
+    inputs.file('src/main/resources/generation-producers/current-worker.properties')
+    inputs.file(producerResources.map { it.file('generation-producers/runtime.zip') })
+    inputs.property('compiler', compiler.map { it.metadata.installationPath.asFile.absolutePath })
+    outputs.dir(adapterResources)
+    doFirst {
+        adapterResources.get().asFile.mkdirs()
+        commandLine 'python3', '-I', '-B', file('scripts/package-worker-adapter.py'), projectDir,
+            producerResources.get().file('generation-producers/runtime.zip').asFile,
+            compiler.get().executablePath.asFile,
+            adapterResources.get().dir('generation-producers').asFile
+    }
+}
+sourceSets.main.resources.srcDir(adapterResources)
+tasks.named('processResources') { dependsOn tasks.named('prepareWorkerAdapter') }
 sourceSets.main.resources.srcDir(producerResources)
 tasks.named('processResources') { dependsOn tasks.named('prepareProducerBundle') }
 
@@ -87,7 +107,7 @@ tasks.register('verifyDefaults', JavaExec) {
 tasks.named('check') { dependsOn tasks.named('verifyDefaults') }
 
 tasks.named('sourcesJar') {
-    dependsOn tasks.named('prepareProducerBundle')
+    dependsOn tasks.named('prepareProducerBundle'), tasks.named('prepareWorkerAdapter')
     include '**/*.java'
 }
 

@@ -39,6 +39,12 @@ public interface CanonicalWorldgenStore {
         throw new IllegalStateException("atomic structure snapshot is unavailable");
     }
 
+    default com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row structureRow(
+            long worldId, com.gameexpert.world.WorldGenerationProfile profile, int x, int z) {
+        return structureSnapshot(worldId, profile).rows().stream()
+                .filter(row -> row.chunkX() == x && row.chunkZ() == z).findFirst().orElse(null);
+    }
+
     /**
      * Publishes CURRENT generation declarations without reading mutable world references.
      * Implementations retain world/profile serialization and replay an existing immutable winner.
@@ -94,9 +100,16 @@ public interface CanonicalWorldgenStore {
         Objects.requireNonNull(snapshots, "canonical structure snapshots");
         int[] lengths = snapshots.stream().mapToInt(row -> row.commit().structureCarrierLength()).toArray();
         structureReferenceSnapshotBinaryLength(snapshots.size(), lengths);
-        return com.gameexpert.authority.versioned.ProducerStoreWire.references(
-                com.gameexpert.authority.versioned.ProducerAuthorities.forProfile(profile),
-                profile, worldId, snapshots);
+        List<com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row> rows = snapshots.stream()
+                .map(snapshot -> {
+                    ChunkCommit commit = snapshot.commit();
+                    if (commit.worldId() != worldId || !profile.getBaselineId().equals(commit.worldIdentity())) {
+                        throw new IllegalArgumentException("mixed structure snapshot profile/world");
+                    }
+                    return com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row.lazy(
+                            commit.chunkX(), commit.chunkZ(), commit.structureCarrierLength(), commit::structureCarrier);
+                }).toList();
+        return new com.gameexpert.authority.versioned.CanonicalStructureSnapshot(worldId, profile, rows).references();
     }
 
     /** Exact SRS26301 wrapper size, used to reject inadmissible snapshots before hashing. */
@@ -118,16 +131,12 @@ public interface CanonicalWorldgenStore {
                 throw new IllegalArgumentException("structure-reference snapshot size overflow",
                         overflow);
             }
-            if (length > 64L * 1024L * 1024L) {
-                throw new IllegalArgumentException(
-                        "structure-reference snapshot binary exceeds bounds");
-            }
         }
         return length;
     }
 
     private static void validateStructureReferenceSnapshotRowCount(int rowCount) {
-        if (rowCount < 0 || rowCount > 1_000_000) {
+        if (rowCount < 0) {
             throw new IllegalArgumentException("structure carrier count exceeds snapshot bounds");
         }
     }

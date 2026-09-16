@@ -11,6 +11,7 @@ import java.util.*;
 final class WorkerClaimSnapshot {
     private final LegacyStoreOperations.ReferenceSnapshot source;
     private final boolean declarationWitnessOnly;
+    private final Map<String,LegacyStoreOperations.RetainedStart> canonicalStarts = new HashMap<>();
     private final LinkedHashMap<String,String> existing = new LinkedHashMap<>();
     private final LinkedHashMap<String,String> pending = new LinkedHashMap<>();
     private final Mc263LocatedMapAuthority.StructureReferenceSnapshot capability;
@@ -23,11 +24,12 @@ final class WorkerClaimSnapshot {
             Map<String,String> persistedClaims,boolean declarationWitnessOnly) throws Exception {
         this.declarationWitnessOnly=declarationWitnessOnly;
         this.source=Objects.requireNonNull(source);
-        if(persistedClaims.size()>1_000_000)throw new IllegalArgumentException("too many structure claims");
-        for(var claim:persistedClaims.entrySet()) {
-            boolean matched=source.starts().stream().anyMatch(row->row.key().equals(claim.getKey())
-                    && row.sourceChunkX==row.start.originChunkX()&&row.sourceChunkZ==row.start.originChunkZ()
-                    && row.rowSha256.equals(claim.getValue()));
+        source.starts().stream()
+                .filter(row -> row.sourceChunkX == row.originChunkX && row.sourceChunkZ == row.originChunkZ)
+                .forEach(row -> canonicalStarts.putIfAbsent(row.key(), row));
+        for(Map.Entry<String,String> claim:persistedClaims.entrySet()) {
+            LegacyStoreOperations.RetainedStart canonical = canonicalStarts.get(claim.getKey());
+            boolean matched = canonical != null && canonical.rowSha256.equals(claim.getValue());
             if(!matched)throw new IllegalArgumentException("claim is not bound to an immutable structure row");
             existing.put(claim.getKey(),claim.getValue());
         }
@@ -62,8 +64,8 @@ final class WorkerClaimSnapshot {
         if(!(acceptedObject instanceof Set<?> accepted))throw new IllegalArgumentException("claim destination set required");
         for(var row:source.starts()) {
             if(!accepted.contains(row.structureId)||!row.contains(x,y,z))continue;
-            if(references(row.structureId,row.start.originChunkX(),row.start.originChunkZ())==0) {
-                var canonical=canonicalRow(row.structureId,row.start.originChunkX(),row.start.originChunkZ());
+            if(references(row.structureId,row.originChunkX,row.originChunkZ)==0) {
+                var canonical=canonicalRow(row.structureId,row.originChunkX,row.originChunkZ);
                 pending.put(canonical.key(),canonical.rowSha256);
             }
             // getStructureAt selects a containing start before canBeReferenced is checked.
@@ -79,20 +81,21 @@ final class WorkerClaimSnapshot {
     }
     private LegacyStoreOperations.RetainedStart canonicalRow(String structureId,int x,int z) {
         String key=structureId+"\0"+x+"\0"+z;
-        return source.starts().stream().filter(value->value.key().equals(key)
-                && value.sourceChunkX==x&&value.sourceChunkZ==z).findFirst()
-                .orElseThrow(()->new NeedsStructure(x,z));
+        LegacyStoreOperations.RetainedStart row = canonicalStarts.get(key);
+        if (row == null) throw new NeedsStructure(x,z);
+        return row;
     }
     static final class NeedsStructure extends RuntimeException {
         final int chunkX,chunkZ;
         NeedsStructure(int chunkX,int chunkZ){super("canonical target structure preparation required");this.chunkX=chunkX;this.chunkZ=chunkZ;}
     }
     private String receipt()throws Exception{
-        var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);
+        MessageDigest digest=MessageDigest.getInstance("SHA-256");
+        DataOutputStream out=new DataOutputStream(new java.security.DigestOutputStream(OutputStream.nullOutputStream(),digest));
         out.write("WEBCRAFT-STRUCTURE-CLAIM-SNAPSHOT-V1\0".getBytes(StandardCharsets.US_ASCII));
         out.writeUTF(source.receipt());
         var all=new TreeMap<>(existing);all.putAll(pending);out.writeInt(all.size());
         for(var entry:all.entrySet()){out.writeUTF(entry.getKey());out.writeUTF(entry.getValue());}
-        out.flush();return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(bytes.toByteArray()));
+        out.flush();return HexFormat.of().formatHex(digest.digest());
     }
 }

@@ -12,7 +12,7 @@ final class WorkerLateLootOperations {
     static byte[] execute(DataInputStream input)throws Exception {
         byte[] legacy=frame(input),snapshotBytes=frame(input);
         var snapshot=LegacyStoreOperations.readReferences(new DataInputStream(new ByteArrayInputStream(snapshotBytes)));
-        int count=input.readInt();if(count<0||count>1_000_000)throw new IllegalArgumentException("invalid claim count");
+        int count=input.readInt();if(count<0)throw new IllegalArgumentException("invalid claim count");
         var persisted=new LinkedHashMap<String,String>();
         for(int i=0;i<count;i++) {
             String structure=input.readUTF();int x=input.readInt(),z=input.readInt();String sha=input.readUTF();
@@ -20,6 +20,10 @@ final class WorkerLateLootOperations {
             if(persisted.put(structure+"\0"+x+"\0"+z,sha)!=null)throw new IllegalArgumentException("duplicate claim key");
         }
         if(input.available()!=0)throw new IllegalArgumentException("trailing late loot request");
+        return execute(legacy, snapshot, persisted);
+    }
+    static byte[] execute(byte[] legacy, LegacyStoreOperations.ReferenceSnapshot snapshot,
+            Map<String,String> persisted) throws Exception {
         var claims=new WorkerClaimSnapshot(snapshot,persisted);
         String epoch=claims.capability().receipt();
         var runner=new Runner(claims);

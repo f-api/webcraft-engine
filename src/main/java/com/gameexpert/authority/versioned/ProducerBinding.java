@@ -99,13 +99,14 @@ final class ProducerBinding {
             legacy.writeInt(context.length);legacy.write(context);legacy.writeLong(seed);legacy.writeUTF(table);legacy.writeLong(rawSeed);
             legacy.writeInt(x);legacy.writeInt(y);legacy.writeInt(z);legacy.writeInt(slots);legacy.writeBoolean(initialLo!=null);
             if(initialLo!=null){legacy.writeLong(initialLo);legacy.writeLong(initialHi);}legacy.flush();
-            var snapshotBytes=new ByteArrayOutputStream();var structure=new DataOutputStream(snapshotBytes);
-            structure.writeLong(snapshot.worldId());structure.writeInt(snapshot.rows().size());
-            for(var row:snapshot.rows()){structure.writeInt(row.chunkX());structure.writeInt(row.chunkZ());byte[] raw=row.carrier();structure.writeInt(raw.length);structure.write(raw);}structure.flush();
-            var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);header(out,14);
-            out.writeInt(legacyBytes.size());legacyBytes.writeTo(out);out.writeInt(snapshotBytes.size());snapshotBytes.writeTo(out);
-            out.writeInt(claims.size());for(var claim:claims){out.writeUTF(claim.structureId());out.writeInt(claim.originChunkX());out.writeInt(claim.originChunkZ());out.writeUTF(claim.structureRowSha256());}out.flush();
-            return LateLootOutcome.fromWorker(producer.exchange(bytes.toByteArray()),context);
+            synchronized (producer) {
+                try (ProducerSnapshotUpload upload = new ProducerSnapshotUpload(
+                        producer, profile, snapshot.worldId(), snapshot.rows())) {
+                    upload.requireReceipt(snapshot.receipt());
+                    upload.claims(claims);
+                    return LateLootOutcome.fromWorker(upload.execute(legacyBytes.toByteArray()), context);
+                }
+            }
         }catch(IOException malformed){throw new IllegalArgumentException("invalid late loot request",malformed);}
     }
     StateOverride defaultState(int blockId) {

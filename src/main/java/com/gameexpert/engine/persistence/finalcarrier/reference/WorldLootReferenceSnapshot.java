@@ -48,19 +48,27 @@ public class WorldLootReferenceSnapshot {
     public boolean matchesEvidence(String structureReceipt, String claimsHash,
             byte[] membership, byte[] claims) {
         return structureSnapshotReceipt.equals(structureReceipt) && claimsFingerprint.equals(claimsHash)
-                && java.util.Arrays.equals(membershipPayload, membership)
-                && java.util.Arrays.equals(claimsPayload, claims);
+                && logicalHash(membershipPayload).equals(logicalHash(membership))
+                && logicalHash(claimsPayload).equals(logicalHash(claims));
+    }
+
+    private static String logicalHash(byte[] payload) {
+        return SegmentedReferencePayload.segmented(payload)
+                ? java.util.HexFormat.of().formatHex(java.util.Arrays.copyOfRange(payload, 17, 49))
+                : LateLootReferenceCodec.sha256(payload);
     }
 
     private static boolean digest(String value) {
         return value != null && value.matches("[0-9a-f]{64}");
     }
     private static void requirePayload(byte[] bytes, int magic) {
-        if (bytes == null || bytes.length < 9 || bytes.length > 64 * 1024 * 1024) {
+        if (bytes == null || bytes.length < 9) {
             throw new IllegalArgumentException("Invalid late reference payload bounds");
         }
-        var reader = java.nio.ByteBuffer.wrap(bytes);
-        if (reader.getInt() != magic || reader.get() != 1 || reader.getInt() < 0) {
+        java.nio.ByteBuffer reader = java.nio.ByteBuffer.wrap(bytes);
+        if (reader.getInt() != magic) throw new IllegalArgumentException("Invalid late reference payload magic");
+        byte version = reader.get();
+        if ((version != 1 && !(version == 2 && SegmentedReferencePayload.segmented(bytes))) || reader.getInt() < 0) {
             throw new IllegalArgumentException("Invalid late reference payload envelope");
         }
         // The selected worker validates the complete ordered rows and authenticated receipts.

@@ -27,13 +27,29 @@ public class CanonicalWorldgenPersistenceService
     @Override @Transactional(readOnly = true)
     public com.gameexpert.authority.versioned.CanonicalStructureSnapshot structureSnapshot(
             long worldId, com.gameexpert.world.WorldGenerationProfile profile) {
-        var rows = new ArrayList<com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row>();
-        for (var row : chunks.findStructureRows(worldId)) {
-            if (!profile.getBaselineId().equals(row.getWorldIdentity())) throw new IllegalStateException("mixed world producer identities");
-            rows.add(new com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row(
-                    row.getChunkX(), row.getChunkZ(), row.getStructureCarrier()));
-        }
+        List<com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row> rows = chunks
+                .findStructureMetadata(worldId).stream().map(row -> lazyStructureRow(row, profile)).toList();
         return new com.gameexpert.authority.versioned.CanonicalStructureSnapshot(worldId, profile, rows);
+    }
+
+    @Override @Transactional(readOnly = true)
+    public com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row structureRow(
+            long worldId, com.gameexpert.world.WorldGenerationProfile profile, int x, int z) {
+        return chunks.findStructureMetadataAt(worldId, x, z)
+                .map(row -> lazyStructureRow(row, profile)).orElse(null);
+    }
+
+    private com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row lazyStructureRow(
+            CanonicalWorldgenChunkRepository.StructureMetadata row,
+            com.gameexpert.world.WorldGenerationProfile profile) {
+        if (!profile.getBaselineId().equals(row.getWorldIdentity())) {
+            throw new IllegalStateException("mixed world producer identities");
+        }
+        long id = row.getId();
+        return com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row.lazy(
+                row.getChunkX(), row.getChunkZ(), row.getCarrierLength(),
+                () -> chunks.findStructureCarrier(id).orElseThrow(
+                        () -> new IllegalStateException("immutable structure row disappeared")));
     }
 
     @Override @Transactional
@@ -167,10 +183,13 @@ public class CanonicalWorldgenPersistenceService
     @Override @Transactional(readOnly = true)
     public com.gameexpert.terrain.mc.loot.Mc263LocatedMapAuthority.StructureReferenceSnapshot
             structureReferenceSnapshot(long worldId) {
-        List<CanonicalChunkSnapshot> frozen = chunks
-                .findAllByWorldIdOrderByChunkXAscChunkZAsc(worldId).stream()
-                .map(CanonicalWorldgenPersistenceService::snapshot).toList();
-        return CanonicalWorldgenStore.freezeStructureReferences(worldId, frozen);
+        List<CanonicalWorldgenChunkRepository.StructureMetadata> metadata = chunks.findStructureMetadata(worldId);
+        com.gameexpert.world.WorldGenerationProfile profile = metadata.isEmpty()
+                ? com.gameexpert.world.WorldGenerationProfiles.CURRENT
+                : com.gameexpert.world.WorldGenerationProfiles.requireSupportedBaselineId(metadata.getFirst().getWorldIdentity());
+        List<com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row> rows = metadata.stream()
+                .map(row -> lazyStructureRow(row, profile)).toList();
+        return new com.gameexpert.authority.versioned.CanonicalStructureSnapshot(worldId, profile, rows).references();
     }
 
     @Override @Transactional

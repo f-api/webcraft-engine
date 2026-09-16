@@ -28,26 +28,53 @@ public final class LegacyStoreOperations {
         out.flush();return result.toByteArray();
     }
     static ReferenceSnapshot readReferences(DataInputStream in) throws Exception {
-        long world=in.readLong();int count=in.readInt();
-        if(world<=0||count<0||count>1_000_000)throw new IllegalArgumentException("invalid structure snapshot binding");
-        MessageDigest digest=MessageDigest.getInstance("SHA-256");
-        digest.update("MC263-CANONICAL-STRUCTURE-REFERENCE-SNAPSHOT-V1\0".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
-        var digestBytes=new ByteArrayOutputStream();var fields=new DataOutputStream(digestBytes);fields.writeLong(world);fields.writeInt(count);fields.flush();digest.update(digestBytes.toByteArray());
-        var references=new LinkedHashMap<String,int[]>();var starts=new ArrayList<RetainedStart>();int priorX=0,priorZ=0;
-        for(int i=0;i<count;i++){
-            int x=in.readInt(),z=in.readInt();if(i>0&&(x<priorX||x==priorX&&z<=priorZ))throw new IllegalArgumentException("structure rows must be unique and ordered");priorX=x;priorZ=z;
-            byte[] raw=bytes(in,false);if(raw.length>16*1024*1024)throw new IllegalArgumentException("structure snapshot row too large");
-            digestBytes.reset();fields.writeInt(x);fields.writeInt(z);fields.writeInt(raw.length);fields.flush();digest.update(digestBytes.toByteArray());digest.update(raw);
-            var carrier=Mc263StructureCarrier.decode(raw);
-            String rowSha256=HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw));
-            for(var chunk:carrier.startChunks())for(var entry:chunk.orderedStarts())if(entry.body() instanceof Mc263StructureCarrier.ValidStart start){
-                String key=entry.structureId()+"\0"+start.originChunkX()+"\0"+start.originChunkZ();
-                starts.add(new RetainedStart(entry.structureId(),start,rowSha256,x,z));
-                int[] existing=references.get(key);if(existing==null)references.put(key,new int[]{start.originChunkX(),start.originChunkZ(),start.references()});else existing[2]=Math.max(existing[2],start.references());
+        SnapshotBuilder builder = new SnapshotBuilder(in.readLong(), in.readInt());
+        while (!builder.complete()) builder.append(in.readInt(), in.readInt(), bytes(in, false));
+        if (in.available() != 0) throw new IllegalArgumentException("trailing snapshot bytes");
+        return builder.finish();
+    }
+    static final class SnapshotBuilder {
+        private final MessageDigest digest;
+        private final int count;
+        private int consumed, priorX, priorZ;
+        private final Map<String,int[]> references = new LinkedHashMap<>();
+        private final List<RetainedStart> starts = new ArrayList<>();
+        private ReferenceSnapshot finished;
+        SnapshotBuilder(long world, int count) throws Exception {
+            if (world <= 0 || count < 0) throw new IllegalArgumentException("invalid structure snapshot binding");
+            this.count = count;
+            digest = MessageDigest.getInstance("SHA-256");
+            digest.update("MC263-CANONICAL-STRUCTURE-REFERENCE-SNAPSHOT-V1\0".getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+            try (DataOutputStream fields = new DataOutputStream(new java.security.DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
+                fields.writeLong(world); fields.writeInt(count);
             }
         }
-        if(in.available()!=0)throw new IllegalArgumentException("trailing snapshot bytes");
-        return new ReferenceSnapshot(HexFormat.of().formatHex(digest.digest()),references,starts);
+        boolean complete() { return consumed == count; }
+        void append(int x, int z, byte[] raw) throws Exception {
+            if (finished != null || complete()) throw new IllegalArgumentException("too many structure rows");
+            if (consumed > 0 && (x < priorX || x == priorX && z <= priorZ)) throw new IllegalArgumentException("structure rows must be unique and ordered");
+            if (raw.length == 0 || raw.length > 16 * 1024 * 1024) throw new IllegalArgumentException("structure snapshot row too large");
+            try (DataOutputStream fields = new DataOutputStream(new java.security.DigestOutputStream(OutputStream.nullOutputStream(), digest))) {
+                fields.writeInt(x); fields.writeInt(z); fields.writeInt(raw.length); fields.write(raw);
+            }
+            Mc263StructureCarrier carrier = Mc263StructureCarrier.decode(raw);
+            String rowSha256 = HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(raw));
+            carrier.startChunks().forEach(chunk -> chunk.orderedStarts().forEach(entry -> {
+                if (entry.body() instanceof Mc263StructureCarrier.ValidStart start) {
+                    String key = entry.structureId() + "\0" + start.originChunkX() + "\0" + start.originChunkZ();
+                    starts.add(new RetainedStart(entry.structureId(), start, rowSha256, x, z));
+                    int[] existing = references.get(key);
+                    if (existing == null) references.put(key, new int[]{start.originChunkX(), start.originChunkZ(), start.references()});
+                    else existing[2] = Math.max(existing[2], start.references());
+                }
+            }));
+            priorX = x; priorZ = z; consumed++;
+        }
+        ReferenceSnapshot finish() {
+            if (!complete()) throw new IllegalArgumentException("incomplete structure snapshot");
+            if (finished == null) finished = new ReferenceSnapshot(HexFormat.of().formatHex(digest.digest()), references, starts);
+            return finished;
+        }
     }
     static final class ReferenceSnapshot implements com.gameexpert.terrain.mc.loot.Mc263LocatedMapAuthority.StructureReferenceSnapshot {
         private final String receipt;
@@ -55,19 +82,24 @@ public final class LegacyStoreOperations {
         private final List<RetainedStart> starts;
         private ReferenceSnapshot(String receipt,Map<String,int[]> values,List<RetainedStart> starts){this.receipt=receipt;this.values=Collections.unmodifiableMap(values);this.starts=List.copyOf(starts);}
         List<RetainedStart> starts(){return starts;}
+        Map<String,int[]> values(){return values;}
         @Override public String receipt(){return receipt;}
         @Override public int references(String key,int x,int z){int[] row=values.get(key+"\0"+x+"\0"+z);return row==null?0:row[2];}
     }
     static final class RetainedStart {
         final String structureId;
-        final Mc263StructureCarrier.ValidStart start;
+        final int originChunkX, originChunkZ;
+        final int minX, minY, minZ, maxX, maxY, maxZ;
         final String rowSha256;
         final int sourceChunkX,sourceChunkZ;
         RetainedStart(String structureId,Mc263StructureCarrier.ValidStart start,String rowSha256,int sourceChunkX,int sourceChunkZ){
-            this.structureId=structureId;this.start=start;this.rowSha256=rowSha256;this.sourceChunkX=sourceChunkX;this.sourceChunkZ=sourceChunkZ;
+            this.structureId=structureId;this.rowSha256=rowSha256;
+            originChunkX=start.originChunkX();originChunkZ=start.originChunkZ();
+            minX=start.adjustedBoundingBox().minX();minY=start.adjustedBoundingBox().minY();minZ=start.adjustedBoundingBox().minZ();
+            maxX=start.adjustedBoundingBox().maxX();maxY=start.adjustedBoundingBox().maxY();maxZ=start.adjustedBoundingBox().maxZ();this.sourceChunkX=sourceChunkX;this.sourceChunkZ=sourceChunkZ;
         }
-        String key(){return structureId+"\0"+start.originChunkX()+"\0"+start.originChunkZ();}
-        boolean contains(int x,int y,int z){var box=start.adjustedBoundingBox();return x>=box.minX()&&x<=box.maxX()&&y>=box.minY()&&y<=box.maxY()&&z>=box.minZ()&&z<=box.maxZ();}
+        String key(){return structureId+"\0"+originChunkX+"\0"+originChunkZ;}
+        boolean contains(int x,int y,int z){return x>=minX&&x<=maxX&&y>=minY&&y<=maxY&&z>=minZ&&z<=maxZ;}
     }
     private static byte[] bytes(DataInputStream in,boolean nullable)throws IOException{int n=in.readInt();if(nullable&&n==-1)return null;if(n<=0||n>64*1024*1024||n>in.available())throw new IllegalArgumentException("invalid carrier length");return in.readNBytes(n);}
     private static void write(DataOutputStream out,byte[] value)throws IOException{out.writeInt(value==null?-1:value.length);if(value!=null)out.write(value);}

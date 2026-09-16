@@ -41,7 +41,7 @@ public final class ProducerAuthorities {
         IsolatedProducerSession existing=sessions.get(profile);
         if(existing!=null) return existing;
         Path root=ProducerBundle.directory();
-        try(var manifest=ProducerAuthorities.class.getResourceAsStream("/generation-producers/current-worker.properties")) {
+        try(var manifest=ProducerAuthorities.class.getResourceAsStream("/generation-producers/runtime-worker.properties")) {
             var jars=ProducerRuntimeManifest.read(manifest,root,profile);
             byte[] sourceGraph;
             try (var graph = ProducerAuthorities.class.getResourceAsStream("/generation-producers/current-source-graph.json")) {

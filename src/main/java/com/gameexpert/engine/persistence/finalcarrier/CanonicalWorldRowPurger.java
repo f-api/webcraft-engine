@@ -49,9 +49,11 @@ public class CanonicalWorldRowPurger {
             "world_structure_entities",
             "world_structure_entity_id_sequences",
             "world_structure_reference_claims",
-            "world_loot_reference_snapshots");
+            "world_loot_reference_snapshots",
+            "world_loot_reference_pages");
 
     private final WorldLootReferenceSnapshotRepository lootReferenceSnapshots;
+    private final com.gameexpert.engine.persistence.finalcarrier.reference.WorldLootReferencePageRepository lootReferencePages;
     private final CanonicalWorldgenChunkPurgeRepository canonicalChunks;
     private final FinalCarrierLaneMutationRepository laneMutations;
     private final FinalCarrierScheduledTickRepository scheduledTicks;
@@ -88,6 +90,7 @@ public class CanonicalWorldRowPurger {
         int structureCount = structureEntities.deleteByWorldId(worldId);
         int sequenceCount = structureEntityIdSequences.deleteByWorldId(worldId);
         int referenceCount = structureReferenceClaims.deleteByWorldId(worldId);
+        int lootPageCount = lootReferencePages.deleteByWorldId(worldId);
         int lootSnapshotCount = lootReferenceSnapshots.deleteByWorldId(worldId);
         int chunkCount = canonicalChunks.deleteByWorldId(worldId);
 
@@ -106,6 +109,7 @@ public class CanonicalWorldRowPurger {
         deleted.put("world_structure_entity_id_sequences", sequenceCount);
         deleted.put("world_structure_reference_claims", referenceCount);
         deleted.put("world_loot_reference_snapshots", lootSnapshotCount);
+        deleted.put("world_loot_reference_pages", lootPageCount);
         return deleted;
     }
 }

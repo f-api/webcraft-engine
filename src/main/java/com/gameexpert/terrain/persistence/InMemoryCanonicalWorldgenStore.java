@@ -30,10 +30,22 @@ public final class InMemoryCanonicalWorldgenStore
         var rows = new ArrayList<com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row>();
         for (Entry entry : entries.values()) if (entry.commit.worldId() == worldId) {
             if (!profile.getBaselineId().equals(entry.commit.worldIdentity())) throw new IllegalStateException("mixed world producer identities");
-            rows.add(new com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row(
-                    entry.commit.chunkX(), entry.commit.chunkZ(), entry.commit.structureCarrier()));
+            rows.add(com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row.lazy(
+                    entry.commit.chunkX(), entry.commit.chunkZ(), entry.commit.structureCarrierLength(),
+                    entry.commit::structureCarrier));
         }
         return new com.gameexpert.authority.versioned.CanonicalStructureSnapshot(worldId, profile, rows);
+    }
+
+    @Override public synchronized com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row structureRow(
+            long worldId, com.gameexpert.world.WorldGenerationProfile profile, int x, int z) {
+        Entry entry = entries.get(new Key(worldId, x, z));
+        if (entry == null) return null;
+        if (!profile.getBaselineId().equals(entry.commit.worldIdentity())) {
+            throw new IllegalStateException("mixed world producer identities");
+        }
+        return com.gameexpert.authority.versioned.CanonicalStructureSnapshot.Row.lazy(
+                x, z, entry.commit.structureCarrierLength(), entry.commit::structureCarrier);
     }
 
     @Override public synchronized boolean commitFromSnapshot(ChunkCommit commit, String expectedReferenceReceipt) {

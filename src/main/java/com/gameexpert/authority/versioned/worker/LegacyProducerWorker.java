@@ -20,7 +20,7 @@ public final class LegacyProducerWorker {
         WorkerProfileBinding.configure(configuration);
     }
 
-    public static void close() { LegacyStructureGenerationRequest.close(); }
+    public static void close() { WorkerSnapshotUpload.close(); LegacyStructureGenerationRequest.close(); }
 
     /** V1 operation 1 verifies a final carrier and returns its basic gameplay projection. */
     public static byte[] dispatch(byte[] request) throws Exception {
@@ -33,6 +33,7 @@ public final class LegacyProducerWorker {
             }
             WorkerProfileBinding.requireRequest(input);
             int operation = input.readUnsignedByte();
+            if (operation >= 15 && operation <= 20) return WorkerSnapshotUpload.execute(input, operation);
             if (operation == 2) return LegacyGenerationRequest.execute(input);
             if (operation == 8 || operation == 9) return WorkerLootOperations.execute(input, operation == 8);
             if (operation == 3) return LegacyStoreOperations.validateCommit(input);
