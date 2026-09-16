@@ -102,6 +102,28 @@ public final class ChestInventory {
         advancePersistenceRevision();
     }
 
+    /** One hopper move, including neighbour rejection, retains its exact source baseline. */
+    public synchronized void runAtomicTransfer(Runnable transfer) {
+        ChestInventory before = detachedInventory();
+        RestoreState beforeRestore = restoreState;
+        try {
+            transfer.run();
+        } catch (RuntimeException | Error failure) {
+            System.arraycopy(before.itemType, 0, itemType, 0, slots);
+            System.arraycopy(before.count, 0, count, 0, slots);
+            System.arraycopy(before.durability, 0, durability, 0, slots);
+            System.arraycopy(before.enchantments, 0, enchantments, 0, slots);
+            System.arraycopy(before.mapIds, 0, mapIds, 0, slots);
+            System.arraycopy(before.shulkerIds, 0, shulkerIds, 0, slots);
+            System.arraycopy(before.bucketMobData, 0, bucketMobData, 0, slots);
+            System.arraycopy(before.itemComponentData, 0, itemComponentData, 0, slots);
+            persistenceRevision = before.persistenceRevision;
+            potItemComponents = before.potItemComponents;
+            restoreState = beforeRestore;
+            throw failure;
+        }
+    }
+
     private void preflightRevisionCapacity() {
         if (restoreState == RestoreState.TERMINAL || persistenceRevision == Long.MAX_VALUE) {
             throw new IllegalStateException("chest persistence revision is exhausted");

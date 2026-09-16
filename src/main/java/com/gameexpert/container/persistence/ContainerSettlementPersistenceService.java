@@ -270,6 +270,14 @@ public class ContainerSettlementPersistenceService {
                     putInt(digest, target.cookTicks());
                     putInt(digest, target.variantCode());
                     putInt(digest, target.xpMilli());
+                    for (PlayerInventory.StackSnapshot stack : target.stacks()) {
+                        putInt(digest, stack.durability());
+                        putLong(digest, stack.enchantments());
+                        putInt(digest, stack.mapId());
+                        putInt(digest, stack.shulkerId());
+                        putNullableString(digest, stack.bucketMobData());
+                        putNullableString(digest, stack.itemComponentData());
+                    }
                 }
                 case InventoryMutationTarget.Brewing target -> {
                     digest.update((byte) 4);
@@ -279,6 +287,7 @@ public class ContainerSettlementPersistenceService {
                     putInts(digest, target.counts());
                     putInt(digest, target.fuel());
                     putInt(digest, target.brewTicks());
+                    putStrings(digest, target.components());
                     digest.update(ByteBuffer.allocate(2).putShort(target.brewingIngredient()).array());
                 }
                 case InventoryMutationTarget.Campfire target -> {

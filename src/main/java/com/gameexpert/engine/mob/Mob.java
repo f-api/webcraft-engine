@@ -3127,6 +3127,11 @@ public abstract class Mob {
         knockbackOverridesAi = true;
     }
 
+    /** Physics may inspect the pending impulse before resident-world validation commits a step. */
+    boolean hasKnockbackOverride() {
+        return knockbackOverridesAi;
+    }
+
     boolean consumeKnockbackOverride() {
         boolean value = knockbackOverridesAi;
         knockbackOverridesAi = false;

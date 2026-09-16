@@ -14,6 +14,9 @@ import lombok.Getter;
 import lombok.NoArgsConstructor;
 
 import com.gameexpert.engine.FurnaceInventory;
+import com.gameexpert.engine.FurnaceVariant;
+import com.gameexpert.engine.inventory.PlayerInventory;
+import com.gameexpert.engine.inventory.PlayerInventory.StackSnapshot;
 
 /** 월드 좌표에 귀속된 화로 세 칸과 남은 연료/조리 진행의 영속 스냅샷입니다. */
 @Getter
@@ -98,6 +101,60 @@ public class WorldFurnace {
     @Column(length = 64)
     private String generatedInstallationFingerprint;
 
+    @Column
+    private Integer inputDurability;
+
+    @Column(columnDefinition = "BIGINT")
+    private Long inputEnchantments;
+
+    @Column
+    private Integer inputMapId;
+
+    @Column
+    private Integer inputShulkerId;
+
+    @Column(length = 512)
+    private String inputBucketMobData;
+
+    @jakarta.persistence.Lob
+    private String inputItemComponentData;
+
+    @Column
+    private Integer fuelDurability;
+
+    @Column(columnDefinition = "BIGINT")
+    private Long fuelEnchantments;
+
+    @Column
+    private Integer fuelMapId;
+
+    @Column
+    private Integer fuelShulkerId;
+
+    @Column(length = 512)
+    private String fuelBucketMobData;
+
+    @jakarta.persistence.Lob
+    private String fuelItemComponentData;
+
+    @Column
+    private Integer outputDurability;
+
+    @Column(columnDefinition = "BIGINT")
+    private Long outputEnchantments;
+
+    @Column
+    private Integer outputMapId;
+
+    @Column
+    private Integer outputShulkerId;
+
+    @Column(length = 512)
+    private String outputBucketMobData;
+
+    @jakarta.persistence.Lob
+    private String outputItemComponentData;
+
     public WorldFurnace(Long worldId, int x, int y, int z) {
         this.worldId = worldId;
         this.posX = x;
@@ -120,6 +177,82 @@ public class WorldFurnace {
         this.cookTicks = cookTicks;
         this.variantCode = variantCode;
         this.xpMilli = xpMilli;
+        inputDurability = null;
+        inputEnchantments = null;
+        inputMapId = null;
+        inputShulkerId = null;
+        inputBucketMobData = null;
+        inputItemComponentData = null;
+        fuelDurability = null;
+        fuelEnchantments = null;
+        fuelMapId = null;
+        fuelShulkerId = null;
+        fuelBucketMobData = null;
+        fuelItemComponentData = null;
+        outputDurability = null;
+        outputEnchantments = null;
+        outputMapId = null;
+        outputShulkerId = null;
+        outputBucketMobData = null;
+        outputItemComponentData = null;
+    }
+
+    /** Full slot identity is validated before any entity field changes. */
+    public boolean replaceIfNewer(FurnaceInventory.Snapshot snapshot) {
+        FurnaceInventory validation = new FurnaceInventory(snapshot.variant());
+        validation.restore(snapshot);
+        if (!replaceIfNewer(snapshot.itemTypes(), snapshot.counts(), snapshot.burnTicks(),
+                snapshot.burnTotalTicks(), snapshot.cookTicks(), snapshot.variant().code(),
+                snapshot.xpMilli(), snapshot.revision())) return false;
+        StackSnapshot[] stacks = snapshot.stacks();
+        inputDurability = stacks[0].durability();
+        inputEnchantments = stacks[0].enchantments();
+        inputMapId = stacks[0].mapId();
+        inputShulkerId = stacks[0].shulkerId();
+        inputBucketMobData = stacks[0].bucketMobData();
+        inputItemComponentData = stacks[0].itemComponentData();
+        fuelDurability = stacks[1].durability();
+        fuelEnchantments = stacks[1].enchantments();
+        fuelMapId = stacks[1].mapId();
+        fuelShulkerId = stacks[1].shulkerId();
+        fuelBucketMobData = stacks[1].bucketMobData();
+        fuelItemComponentData = stacks[1].itemComponentData();
+        outputDurability = stacks[2].durability();
+        outputEnchantments = stacks[2].enchantments();
+        outputMapId = stacks[2].mapId();
+        outputShulkerId = stacks[2].shulkerId();
+        outputBucketMobData = stacks[2].bucketMobData();
+        outputItemComponentData = stacks[2].itemComponentData();
+        return true;
+    }
+
+    public FurnaceInventory.Snapshot snapshot() {
+        if (FurnaceVariant.fromCode(variantCode).code() != variantCode) {
+            throw new IllegalStateException("invalid stored furnace variant");
+        }
+        StackSnapshot[] stacks = new StackSnapshot[] {
+            storedStack(inputType, inputCount, inputDurability, inputEnchantments,
+                    inputMapId, inputShulkerId, inputBucketMobData, inputItemComponentData),
+            storedStack(fuelType, fuelCount, fuelDurability, fuelEnchantments,
+                    fuelMapId, fuelShulkerId, fuelBucketMobData, fuelItemComponentData),
+            storedStack(outputType, outputCount, outputDurability, outputEnchantments,
+                    outputMapId, outputShulkerId, outputBucketMobData, outputItemComponentData),
+        };
+        return new FurnaceInventory.Snapshot(new short[] { inputType, fuelType, outputType },
+                new int[] { inputCount, fuelCount, outputCount }, burnTicks, burnTotalTicks,
+                cookTicks, FurnaceVariant.fromCode(variantCode), persistenceRevision, xpMilli, stacks);
+    }
+
+    private static StackSnapshot storedStack(short type, int count, Integer durability,
+            Long enchantments, Integer mapId, Integer shulkerId, String bucket, String components) {
+        return new StackSnapshot(type, count,
+                durability == null ? PlayerInventory.initialDurability(type) : durability,
+                enchantments == null ? 0L : enchantments, mapId == null ? 0 : mapId,
+                shulkerId == null ? 0 : shulkerId, bucket, components);
+    }
+
+    public boolean matchesExact(FurnaceInventory.Snapshot expected) {
+        return snapshot().equals(expected);
     }
 
     public boolean replaceIfNewer(short[] itemTypes, int[] counts,

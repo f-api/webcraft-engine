@@ -105,7 +105,7 @@ public final class MobPhysics {
         final boolean fly = mode == MoveMode.FLY;
         final boolean swim = mode == MoveMode.SWIM;
         final int floatGoalMask = mob.consumeFloatGoalMask();
-        final boolean knockbackOverride = mob.consumeKnockbackOverride();
+        final boolean knockbackOverride = mob.hasKnockbackOverride();
         final boolean liquid = floatGoalMask >= 0;
 
         final double x0 = mob.x, y0 = mob.y, z0 = mob.z;
@@ -176,6 +176,8 @@ public final class MobPhysics {
             }
             mob.vy = Math.min(mob.vy, Math.max(-SUBSTEP, limit));
         }
+        // Unknown aquatic cells return without advancing physics or consuming the pending impulse.
+        mob.consumeKnockbackOverride();
         boolean blockedHoriz = moved.hitX || moved.hitZ;
         boolean blockedX = moved.hitX;
         boolean blockedZ = moved.hitZ;

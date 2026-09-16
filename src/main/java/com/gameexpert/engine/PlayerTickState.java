@@ -752,6 +752,11 @@ public final class PlayerTickState {
         lastFallPoseY = y;
     }
 
+    /** 점프 상승분을 제외하는 낙하 피해 기준과 달리, 실제 하강을 치명타에 반영한다. */
+    boolean canCriticalStrike(boolean sprinting) {
+        return airborne && (descendedSinceFallReference || fallPeakY > y) && !sprinting;
+    }
+
     double fallPeakY() {
         return fallPeakY;
     }

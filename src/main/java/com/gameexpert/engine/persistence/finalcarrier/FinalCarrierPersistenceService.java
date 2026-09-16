@@ -2574,6 +2574,19 @@ public class FinalCarrierPersistenceService
         return current + 1L;
     }
 
+    /**
+     * A writer can consume a scheduled row between two separate recovery calls. Pin both reads
+     * to one repeatable database snapshot so that row cannot appear in both queue and outbox.
+     * The public proxy owns this transaction; internal calls intentionally join it.
+     */
+    @Override
+    @Transactional(isolation = Isolation.REPEATABLE_READ)
+    public com.gameexpert.engine.persistence.tick.FinalCarrierTickRecoverySnapshot loadRecovery(
+            long worldId, int limit) {
+        return new com.gameexpert.engine.persistence.tick.FinalCarrierTickRecoverySnapshot(
+                loadWorld(worldId), loadDurablePublications(worldId, limit));
+    }
+
     @Override
     @Transactional
     public List<FinalCarrierTickScheduler.ScheduledTick> loadWorld(long worldId) {
@@ -3617,11 +3630,21 @@ public class FinalCarrierPersistenceService
         for (FinalCarrierConsumedTick row : settledRows) {
             FinalCarrierTickScheduler.ScheduledTick durable = durableConsumedTick(row);
             FinalCarrierTickScheduler.ScheduledTick candidate = expected.get(durable.key());
+            boolean duplicateKey = !settled.add(durable.key());
+            boolean duplicateOrder = !durableOrders.add(durable.durableOrder());
             if (!durable.receipt().equals(receipt) || candidate == null
-                    || durable.durableOrder() <= 0L || !settled.add(durable.key())
-                    || !durableOrders.add(durable.durableOrder())
+                    || durable.durableOrder() <= 0L || duplicateKey || duplicateOrder
                     || !row.matchesCandidate(candidate)) {
-                throw durableState("consumed tick differs from canonical authority", null);
+                throw durableState("consumed tick differs from canonical authority: "
+                        + "world=" + receipt.worldId() + " chunk=" + receipt.chunkX() + "," + receipt.chunkZ()
+                        + " key=" + durable.key() + " order=" + durable.durableOrder()
+                        + " duplicateKey=" + duplicateKey + " duplicateOrder=" + duplicateOrder
+                        + " candidate=" + (candidate == null ? "missing" : "present")
+                        + " due=" + durable.dueTick() + "/" + (candidate == null ? "-" : candidate.dueTick())
+                        + " block=" + durable.expectedBlockId() + "/" + (candidate == null ? "-" : candidate.expectedBlockId())
+                        + " priority=" + durable.priority() + "/" + (candidate == null ? "-" : candidate.priority())
+                        + " subTick=" + durable.subTickOrder() + "/" + (candidate == null ? "-" : candidate.subTickOrder())
+                        + receiptConflictDetail(durable.receipt(), receipt), null);
             }
             validatePublicationRow(row);
             if (present.contains(durable.key())) {

@@ -140,6 +140,17 @@ public final class PlayerInventory {
             return itemType == PlayerInventory.EMPTY;
         }
 
+        public StackSnapshot withCount(int amount) {
+            return amount == 0 ? EMPTY : new StackSnapshot(itemType, amount, durability,
+                    enchantments, mapId, shulkerId, bucketMobData, itemComponentData);
+        }
+
+        public boolean sameIdentity(StackSnapshot other) {
+            return other != null && (isEmpty() || other.isEmpty()
+                    ? isEmpty() && other.isEmpty()
+                    : withCount(1).equals(other.withCount(1)));
+        }
+
         @Override
         public boolean equals(Object other) {
             if (this == other) return true;
@@ -5142,13 +5153,14 @@ public final class PlayerInventory {
         FurnaceInventory.StagedCommand staged = furnace.beginLogicalCommand();
         short targetType = staged.itemType(slot);
         int targetCount = staged.itemCount(slot);
+        StackSnapshot target = staged.stack(slot);
         if (shift) {
             if (cursorType != EMPTY || targetType == EMPTY) return false;
             CompletePersistenceSnapshot before = completePersistenceSnapshot();
             int inserted = addToArrays(itemType, count, durability, enchantments, mapIds, shulkerIds,
                     bucketMobData, itemComponentData,
-                    targetType, targetCount, initialDurability(targetType), EnchantmentRules.EMPTY_ENCHANTMENTS,
-                    0, 0, null, null, 0, SLOTS);
+                    targetType, targetCount, target.durability(), target.enchantments(),
+                    target.mapId(), target.shulkerId(), target.bucketMobData(), target.itemComponentData(), 0, SLOTS);
             if (inserted == 0) return false;
             if (staged.take(slot, inserted) != inserted) {
                 installCompleteSnapshot(before);
@@ -5161,23 +5173,21 @@ public final class PlayerInventory {
             if (targetType == EMPTY) return false;
             int picked = button == CraftButton.RIGHT
                     ? (targetCount + 1) / 2 : targetCount;
-            if (!containerCursorFits(targetType, picked, initialDurability(targetType))) return false;
+            if (!containerCursorFits(target.withCount(picked))) return false;
             if (staged.take(slot, picked) != picked) return false;
             CompletePersistenceSnapshot before = completePersistenceSnapshot();
-            setCursor(targetType, picked, initialDurability(targetType), EnchantmentRules.EMPTY_ENCHANTMENTS);
+            setCursor(target.withCount(picked));
             advancePersistenceRevision();
             return commitFurnaceAtomically(staged, before);
         }
         StackSnapshot held = cursorStackSnapshot();
-        if (!FurnaceInventory.isTypeCountCarrier(held)) return false;
         if (slot == FurnaceInventory.OUTPUT_SLOT) {
-            if (!sameStack(cursorType, cursorDurability, cursorEnchantments, cursorMapId,
-                    targetType, initialDurability(targetType), EnchantmentRules.EMPTY_ENCHANTMENTS, 0)) return false;
+            if (!held.sameIdentity(target)) return false;
             int moved = Math.min(
                     button == CraftButton.RIGHT ? 1 : targetCount,
                     stackMax(cursorType) - cursorCount);
             if (moved <= 0
-                    || !containerCursorFits(cursorType, cursorCount + moved, cursorDurability)) {
+                    || !containerCursorFits(held.withCount(cursorCount + moved))) {
                 return false;
             }
             if (staged.take(slot, moved) != moved) return false;
@@ -5187,7 +5197,7 @@ public final class PlayerInventory {
             return commitFurnaceAtomically(staged, before);
         }
         if (!validFurnaceSlotItem(furnace, slot, cursorType)) return false;
-        if (targetType == EMPTY || targetType == cursorType) {
+        if (targetType == EMPTY || target.sameIdentity(held)) {
             int requested = button == CraftButton.RIGHT ? 1 : cursorCount;
             int moved = staged.add(slot, held,
                     Math.min(requested, staged.roomFor(slot, cursorType)));
@@ -5199,10 +5209,10 @@ public final class PlayerInventory {
             return commitFurnaceAtomically(staged, before);
         }
         int heldCount = cursorCount;
-        if (!containerCursorFits(targetType, targetCount, initialDurability(targetType))) return false;
+        if (!containerCursorFits(target)) return false;
         if (!staged.replace(slot, held) || staged.itemCount(slot) != heldCount) return false;
         CompletePersistenceSnapshot before = completePersistenceSnapshot();
-        setCursor(targetType, targetCount, initialDurability(targetType), EnchantmentRules.EMPTY_ENCHANTMENTS);
+        setCursor(target);
         advancePersistenceRevision();
         return commitFurnaceAtomically(staged, before);
     }
@@ -5223,8 +5233,7 @@ public final class PlayerInventory {
             int[] slots, CraftButton button) {
         if (settlementMutationBlocked() || furnace == null || areas == null || slots == null
                 || areas.length != slots.length || areas.length == 0 || button == null || cursorType == EMPTY
-                || craftingOpen()
-                || !FurnaceInventory.isTypeCountCarrier(cursorStackSnapshot())) return false;
+                || craftingOpen()) return false;
         preflightRevisionCapacity();
         FurnaceInventory.StagedCommand staged = furnace.beginLogicalCommand();
         CompletePersistenceSnapshot before = completePersistenceSnapshot();
@@ -5247,6 +5256,10 @@ public final class PlayerInventory {
                     if (itemType[slot] == EMPTY) {
                         itemType[slot] = cursorType; durability[slot] = cursorDurability;
                         enchantments[slot] = cursorEnchantments;
+                        mapIds[slot] = cursorMapId;
+                        shulkerIds[slot] = cursorShulkerId;
+                        bucketMobData[slot] = cursorBucketMobData;
+                        itemComponentData[slot] = cursorItemComponentData;
                     }
                     count[slot] += moved;
                 }
@@ -5277,12 +5290,10 @@ public final class PlayerInventory {
         CompletePersistenceSnapshot before = completePersistenceSnapshot();
         boolean changed = false;
         boolean furnaceChanged = false;
-        if (cursorMapId == 0 && cursorShulkerId == 0 && cursorBucketMobData == null
-                && cursorItemComponentData == null) {
+        {
             for (int slot = 0; slot < FurnaceInventory.SLOTS
                     && cursorCount < stackMax(cursorType); slot++) {
-                if (!sameStack(cursorType, cursorDurability, cursorEnchantments, 0,
-                        staged.itemType(slot), initialDurability(staged.itemType(slot)), EnchantmentRules.EMPTY_ENCHANTMENTS, 0)) continue;
+                if (!cursorStackSnapshot().sameIdentity(staged.stack(slot))) continue;
                 int moved = staged.take(slot, Math.min(stackMax(cursorType) - cursorCount,
                         staged.itemCount(slot)));
                 cursorCount += moved;
@@ -5481,28 +5492,36 @@ public final class PlayerInventory {
         String[] nextComponents = itemComponentData.clone();
         short currentType = staged.itemType(FurnaceInventory.INPUT_SLOT);
         int currentCount = staged.itemCount(FurnaceInventory.INPUT_SLOT);
+        StackSnapshot current = staged.stack(FurnaceInventory.INPUT_SLOT);
         if (currentType != EMPTY && addToArrays(
                 nextType, nextCount, nextDurability, nextEnchantments, nextMapIds, nextShulkerIds,
                 nextBucket, nextComponents,
-                currentType, currentCount, initialDurability(currentType), EnchantmentRules.EMPTY_ENCHANTMENTS,
-                0, 0, null, null, 0, SLOTS) != currentCount) {
+                currentType, currentCount, current.durability(), current.enchantments(),
+                current.mapId(), current.shulkerId(), current.bucketMobData(), current.itemComponentData(), 0, SLOTS) != currentCount) {
             return false;
         }
+        StackSnapshot selected = null;
         int available = 0;
         for (int inventorySlot = 0; inventorySlot < SLOTS; inventorySlot++) {
-            StackSnapshot candidate = new StackSnapshot(nextType[inventorySlot],
-                    nextCount[inventorySlot], nextDurability[inventorySlot],
-                    nextEnchantments[inventorySlot], nextMapIds[inventorySlot],
-                    nextShulkerIds[inventorySlot], nextBucket[inventorySlot],
-                    nextComponents[inventorySlot]);
-            if (candidate.itemType() == input
-                    && FurnaceInventory.isTypeCountCarrier(candidate)) {
-                available += candidate.count();
+            if (nextType[inventorySlot] != input) continue;
+            StackSnapshot candidate = new StackSnapshot(input, nextCount[inventorySlot],
+                    nextDurability[inventorySlot], nextEnchantments[inventorySlot], nextMapIds[inventorySlot],
+                    nextShulkerIds[inventorySlot], nextBucket[inventorySlot], nextComponents[inventorySlot]);
+            int compatible = 0;
+            for (int other = 0; other < SLOTS; other++) {
+                if (nextType[other] != input) continue;
+                StackSnapshot value = new StackSnapshot(input, nextCount[other], nextDurability[other],
+                        nextEnchantments[other], nextMapIds[other], nextShulkerIds[other], nextBucket[other], nextComponents[other]);
+                if (candidate.sameIdentity(value)) compatible += value.count();
             }
+            if (selected == null || maximum && compatible > available) {
+                selected = candidate;
+                available = compatible;
+            }
+            if (!maximum) break;
         }
         int desired = maximum ? Math.min(stackMax(input), available) : Math.min(1, available);
-        StackSnapshot plainInput = desired == 0 ? null : new StackSnapshot(input, desired, initialDurability(input),
-                EnchantmentRules.EMPTY_ENCHANTMENTS, 0, 0, null, null);
+        StackSnapshot plainInput = selected == null ? null : selected.withCount(desired);
         if (desired == 0
                 || consumeExact(nextType, nextCount, nextDurability, nextEnchantments,
                         nextMapIds, nextShulkerIds, nextBucket, nextComponents,
@@ -5919,6 +5938,17 @@ public final class PlayerInventory {
     private boolean containerCursorFits(
             short type, int amount, int itemDurability, int itemMapId, int itemShulkerId) {
         return containerCursorFits(type, amount, itemDurability, itemMapId, itemShulkerId, null);
+    }
+
+    private boolean containerCursorFits(StackSnapshot stack) {
+        return containerCursorFits(stack.itemType(), stack.count(), stack.durability(),
+                stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                stack.bucketMobData(), stack.itemComponentData());
+    }
+
+    private void setCursor(StackSnapshot stack) {
+        setCursor(stack.itemType(), stack.count(), stack.durability(), stack.enchantments(),
+                stack.mapId(), stack.shulkerId(), stack.bucketMobData(), stack.itemComponentData());
     }
 
     private boolean containerCursorFits(short type, int amount, int itemDurability,

@@ -83,11 +83,16 @@ public class GameConnectionRuntime {
         Difficulty difficulty = Difficulty.orDefault(
                 (Difficulty) session.getAttributes().get(ATTR_WORLD_DIFFICULTY));
         String nickname = (String) session.getAttributes().get(ATTR_NICKNAME);
+        boolean stageTrace = Boolean.getBoolean("webcraft.snapshotStageTrace");
+        long joinStartNanos = stageTrace ? System.nanoTime() : 0L;
+        long spawnNanos = 0L;
+        long joinedNanos = 0L;
 
         try {
             // 원점이 바다일 수 있으므로(지형 v7 이후 심해 33.5%) 마른 땅을 찾아 스폰한다.
             // 그러지 않으면 시드에 따라 접속하자마자 물속에서 시작해 익사한다.
             int[] spawn = engineManager.worldSpawn(worldId, seed);
+            if (stageTrace) spawnNanos = System.nanoTime();
 
             // 틱 엔진에 입장을 알리고(첫 입장이면 런타임 생성), 현재 월드 시간과 다른 접속자 pose를 받습니다.
             // 이 과정에서 저장 중인 직전 퇴장 스냅샷을 먼저 복원하고 해당 월드 diff 버퍼를 flush합니다.
@@ -98,6 +103,7 @@ public class GameConnectionRuntime {
                             : engineManager.onPlayerJoin(worldId, seed, difficulty, playerId, nickname,
                                     entry.connectionId(), spawn[0], spawn[1], spawn[2]);
             PlayerWorldState state = join.selfState();
+            if (stageTrace) joinedNanos = System.nanoTime();
 
             Welcome welcome = new Welcome(toSelf(state), join.worldTime(),
                     join.otherPlayers(), join.mobs(), join.items(), join.boats(), join.cushions(),
@@ -122,6 +128,13 @@ public class GameConnectionRuntime {
                 }
                 if (session instanceof DimensionSession dimensionSession) dimensionSession.welcomeComplete();
                 HeartbeatMonitor.welcomeCompleted(session);
+            }
+            if (stageTrace) {
+                long sentNanos = System.nanoTime();
+                log.info("join stage: world={} nickname={} 스폰탐색+{}ms 런타임입장+{}ms welcome송신+{}ms",
+                        worldId, nickname, (spawnNanos - joinStartNanos) / 1_000_000L,
+                        (joinedNanos - joinStartNanos) / 1_000_000L,
+                        (sentNanos - joinStartNanos) / 1_000_000L);
             }
             broadcaster.sendTo(session, new com.gameexpert.ws.dto.WsMessages.PlayerStatistics(
                     state.sleepInStrawBedOrZero()));

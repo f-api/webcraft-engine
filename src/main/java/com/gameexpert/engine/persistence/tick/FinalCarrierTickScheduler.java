@@ -369,6 +369,12 @@ public final class FinalCarrierTickScheduler {
 
         List<ScheduledTick> loadChunk(long worldId, int chunkX, int chunkZ);
 
+        /** Production boundaries override this to read queue and outbox in one transaction. */
+        default FinalCarrierTickRecoverySnapshot loadRecovery(long worldId, int limit) {
+            return new FinalCarrierTickRecoverySnapshot(loadWorld(worldId),
+                    loadDurablePublications(worldId, limit));
+        }
+
         Settlement settleAtomically(ScheduledTick tick, DueDisposition disposition,
                 TickMutation mutation);
 
@@ -691,11 +697,10 @@ public final class FinalCarrierTickScheduler {
 
     /** Loads durable rows after runtime construction without altering their absolute due times. */
     public void restoreWorld() {
-        List<ScheduledTick> worldRows = List.copyOf(
-                Objects.requireNonNull(persistence.loadWorld(worldId), "world rows"));
-        List<DurablePublication> publications = List.copyOf(Objects.requireNonNull(
-                persistence.loadDurablePublications(worldId, MAX_PENDING_TICKS),
-                "durable publications"));
+        FinalCarrierTickRecoverySnapshot snapshot = Objects.requireNonNull(
+                persistence.loadRecovery(worldId, MAX_PENDING_TICKS), "recovery snapshot");
+        List<ScheduledTick> worldRows = snapshot.scheduled();
+        List<DurablePublication> publications = snapshot.publications();
         if (publications.size() > MAX_PENDING_TICKS) {
             throw new FinalCarrierDurableStateException(
                     "durable publication batch exceeds bounded capacity");

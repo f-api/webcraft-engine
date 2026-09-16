@@ -1,6 +1,6 @@
 plugins { id 'java-library' }
 group = 'io.github.f-api'
-version = '2.1.4'
+version = '2.1.5'
 java {
     toolchain { languageVersion = JavaLanguageVersion.of(21) }
     withSourcesJar()

@@ -7,6 +7,7 @@ import java.util.Objects;
 import java.util.function.Consumer;
 
 import com.gameexpert.engine.inventory.PlayerInventory;
+import com.gameexpert.engine.inventory.PlayerInventory.StackSnapshot;
 
 /**
  * 좌표에 귀속된 화로의 세 슬롯과 진행 상태입니다.
@@ -35,6 +36,7 @@ public final class FurnaceInventory {
     private final FurnaceVariant variant;
     private final short[] itemType = new short[SLOTS];
     private final int[] count = new int[SLOTS];
+    private final StackSnapshot[] identities = emptyIdentities();
     private int burnTicks;
     private int burnTotalTicks;
     private int cookTicks;
@@ -113,6 +115,34 @@ public final class FurnaceInventory {
         return count[slot];
     }
 
+    public synchronized StackSnapshot stack(int slot) {
+        return stack(itemType, count, identities, slot);
+    }
+
+    private static StackSnapshot[] emptyIdentities() {
+        StackSnapshot[] result = new StackSnapshot[SLOTS];
+        Arrays.fill(result, StackSnapshot.EMPTY);
+        return result;
+    }
+
+    private static StackSnapshot plain(short type, int amount) {
+        return amount == 0 ? StackSnapshot.EMPTY : new StackSnapshot(type, amount,
+                PlayerInventory.initialDurability(type), 0L, 0, 0, null, null);
+    }
+
+    private static StackSnapshot stack(short[] types, int[] counts,
+            StackSnapshot[] identities, int slot) {
+        if (slot < 0 || slot >= SLOTS || counts[slot] == 0) return StackSnapshot.EMPTY;
+        return identities[slot].withCount(counts[slot]);
+    }
+
+    private static StackSnapshot[] fullStacks(short[] types, int[] counts,
+            StackSnapshot[] identities) {
+        StackSnapshot[] result = new StackSnapshot[SLOTS];
+        for (int slot = 0; slot < SLOTS; slot++) result[slot] = stack(types, counts, identities, slot);
+        return result;
+    }
+
     public synchronized int burnTicks() {
         return burnTicks;
     }
@@ -169,9 +199,21 @@ public final class FurnaceInventory {
     /** Snapshot-shaped restore entry point used by persistence and detached world-tick plans. */
     public synchronized void restore(Snapshot snapshot) {
         if (snapshot == null) throw new IllegalArgumentException("furnace snapshot is required");
-        restore(snapshot.itemTypes(), snapshot.counts(), snapshot.burnTicks(),
-                snapshot.burnTotalTicks(), snapshot.cookTicks(), snapshot.variant(),
-                snapshot.revision(), snapshot.xpMilli());
+        preflightRevisionCapacity();
+        PreparedState prepared = prepareRestore(snapshot.itemTypes(), snapshot.counts(),
+                snapshot.burnTicks(), snapshot.burnTotalTicks(), snapshot.cookTicks(),
+                snapshot.variant(), snapshot.revision(), snapshot.xpMilli());
+        StackSnapshot[] restored = snapshot.stacks();
+        for (int slot = 0; slot < SLOTS; slot++) {
+            if (restored[slot] == null || restored[slot].itemType() != prepared.types[slot]
+                    || restored[slot].count() != prepared.counts[slot]) {
+                throw new IllegalArgumentException("furnace stack identity differs from slot");
+            }
+        }
+        installPreparedState(prepared, true);
+        for (int slot = 0; slot < SLOTS; slot++) {
+            identities[slot] = restored[slot].isEmpty() ? StackSnapshot.EMPTY : restored[slot].withCount(1);
+        }
     }
 
     private PreparedState prepareRestore(short[] types, int[] counts, int savedBurnTicks,
@@ -234,6 +276,9 @@ public final class FurnaceInventory {
     private void installPreparedState(PreparedState prepared, boolean bindRevision) {
         System.arraycopy(prepared.types, 0, itemType, 0, SLOTS);
         System.arraycopy(prepared.counts, 0, count, 0, SLOTS);
+        for (int slot = 0; slot < SLOTS; slot++) {
+            identities[slot] = plain(itemType[slot], count[slot] == 0 ? 0 : 1);
+        }
         burnTicks = prepared.burnTicks;
         burnTotalTicks = prepared.burnTotalTicks;
         cookTicks = prepared.cookTicks;
@@ -282,26 +327,29 @@ public final class FurnaceInventory {
         return Math.max(0, PlayerInventory.stackMax(type) - counts[slot]);
     }
 
-    /** 검증된 수량을 입력 또는 연료 슬롯에 넣습니다. 실제로 들어간 수량을 반환합니다. */
+    public synchronized int roomFor(int slot, StackSnapshot incoming) {
+        if (incoming == null || incoming.isEmpty()) return 0;
+        StackSnapshot current = stack(slot);
+        return !current.isEmpty() && !current.sameIdentity(incoming) ? 0
+                : roomFor(itemType, count, slot, incoming.itemType());
+    }
+
+    /** Validated stacks retain their complete identity until actual consumption. */
     public synchronized int add(int slot, short type, int amount) {
-        int moved = Math.min(Math.max(amount, 0), roomFor(itemType, count, slot, type));
+        if (amount <= 0 || type == PlayerInventory.EMPTY || !PlayerInventory.isRegisteredItemType(type)) return 0;
+        return add(slot, plain(type, Math.min(amount, PlayerInventory.stackMax(type))), amount);
+    }
+
+    public synchronized int add(int slot, StackSnapshot incoming, int amount) {
+        if (incoming == null) return 0;
+        int moved = Math.min(Math.min(Math.max(amount, 0), incoming.count()), roomFor(slot, incoming));
         if (moved == 0) return 0;
         preflightRevisionCapacity();
-        itemType[slot] = type;
+        itemType[slot] = incoming.itemType();
+        identities[slot] = incoming.withCount(1);
         count[slot] += moved;
         advancePersistenceRevision();
         return moved;
-    }
-
-    /**
-     * Full-identity ingress for a carrier whose destination can persist only type and count.
-     * Pristine equipment has a durability derived from its item type, so it is also lossless.
-     * Modified identities remain rejected before either side mutates.
-     */
-    public synchronized int add(int slot, PlayerInventory.StackSnapshot stack, int amount) {
-        if (!isTypeCountCarrier(stack)) return 0;
-        int requested = Math.min(Math.max(amount, 0), stack.count());
-        return add(slot, stack.itemType(), requested);
     }
 
     public static boolean isTypeCountCarrier(PlayerInventory.StackSnapshot stack) {
@@ -333,6 +381,7 @@ public final class FurnaceInventory {
     private void clearSlot(int slot) {
         itemType[slot] = PlayerInventory.EMPTY;
         count[slot] = 0;
+        identities[slot] = StackSnapshot.EMPTY;
     }
 
     /**
@@ -406,6 +455,7 @@ public final class FurnaceInventory {
     private boolean canAcceptOutput(short output) {
         return itemType[OUTPUT_SLOT] == PlayerInventory.EMPTY
                 || itemType[OUTPUT_SLOT] == output
+                        && stack(OUTPUT_SLOT).sameIdentity(plain(output, 1))
                         && count[OUTPUT_SLOT] < PlayerInventory.stackMax(output);
     }
 
@@ -426,7 +476,10 @@ public final class FurnaceInventory {
     }
 
     private void addOutput(short output) {
-        if (itemType[OUTPUT_SLOT] == PlayerInventory.EMPTY) itemType[OUTPUT_SLOT] = output;
+        if (itemType[OUTPUT_SLOT] == PlayerInventory.EMPTY) {
+            itemType[OUTPUT_SLOT] = output;
+            identities[OUTPUT_SLOT] = plain(output, 1);
+        }
         count[OUTPUT_SLOT]++;
         // 제련 경험치는 밀리 단위로 화로에 쌓아 두고 결과 칸을 꺼낼 때 정산한다.
         xpMilli += smeltXpDelta(output);
@@ -509,7 +562,7 @@ public final class FurnaceInventory {
         List<StoredStack> out = new ArrayList<>(SLOTS);
         for (int slot = 0; slot < SLOTS; slot++) {
             if (itemType[slot] != PlayerInventory.EMPTY && count[slot] > 0) {
-                out.add(new StoredStack(itemType[slot], count[slot]));
+                out.add(new StoredStack(stack(slot)));
             }
             clearSlot(slot);
         }
@@ -526,7 +579,7 @@ public final class FurnaceInventory {
     /** 슬롯·진행·변형·revision·XP를 한 지점에서 캡처합니다. */
     public synchronized Snapshot snapshot() {
         return new Snapshot(itemType, count, burnTicks, burnTotalTicks, cookTicks,
-                variant, persistenceRevision, xpMilli);
+                variant, persistenceRevision, xpMilli, fullStacks(itemType, count, identities));
     }
 
     /** persistence naming alias. */
@@ -579,6 +632,8 @@ public final class FurnaceInventory {
         private final int[] originCounts;
         private final short[] stagedTypes;
         private final int[] stagedCounts;
+        private final StackSnapshot[] originIdentities;
+        private final StackSnapshot[] stagedIdentities;
         private int stagedBurnTicks;
         private int stagedBurnTotalTicks;
         private int stagedCookTicks;
@@ -599,6 +654,8 @@ public final class FurnaceInventory {
             this.originCounts = counts.clone();
             this.stagedTypes = types.clone();
             this.stagedCounts = counts.clone();
+            this.originIdentities = identities.clone();
+            this.stagedIdentities = identities.clone();
             this.stagedBurnTicks = burnTicks;
             this.stagedBurnTotalTicks = burnTotalTicks;
             this.stagedCookTicks = cookTicks;
@@ -627,21 +684,29 @@ public final class FurnaceInventory {
                     : FurnaceInventory.this.roomFor(stagedTypes, stagedCounts, slot, type);
         }
 
-        public int add(int slot, short type, int amount) {
+        public StackSnapshot stack(int slot) {
             checkOpen();
-            int moved = Math.min(Math.max(amount, 0),
-                    FurnaceInventory.this.roomFor(stagedTypes, stagedCounts, slot, type));
-            if (moved == 0) return 0;
-            stagedTypes[slot] = type;
-            stagedCounts[slot] += moved;
-            return moved;
+            return FurnaceInventory.stack(stagedTypes, stagedCounts, stagedIdentities, slot);
         }
 
-        public int add(int slot, PlayerInventory.StackSnapshot stack, int amount) {
+        public int add(int slot, short type, int amount) {
             checkOpen();
-            if (!isTypeCountCarrier(stack)) return 0;
-            int requested = Math.min(Math.max(amount, 0), stack.count());
-            return add(slot, stack.itemType(), requested);
+            if (amount <= 0 || type == PlayerInventory.EMPTY || !PlayerInventory.isRegisteredItemType(type)) return 0;
+            return add(slot, plain(type, Math.min(amount, PlayerInventory.stackMax(type))), amount);
+        }
+
+        public int add(int slot, StackSnapshot incoming, int amount) {
+            checkOpen();
+            if (incoming == null || incoming.isEmpty()) return 0;
+            StackSnapshot current = stack(slot);
+            if (!current.isEmpty() && !current.sameIdentity(incoming)) return 0;
+            int moved = Math.min(Math.min(Math.max(amount, 0), incoming.count()),
+                    roomFor(slot, incoming.itemType()));
+            if (moved == 0) return 0;
+            stagedTypes[slot] = incoming.itemType();
+            stagedIdentities[slot] = incoming.withCount(1);
+            stagedCounts[slot] += moved;
+            return moved;
         }
 
         public int take(int slot, int amount) {
@@ -650,7 +715,10 @@ public final class FurnaceInventory {
             int moved = Math.min(stagedCounts[slot], amount);
             if (moved == 0) return 0;
             stagedCounts[slot] -= moved;
-            if (stagedCounts[slot] == 0) stagedTypes[slot] = PlayerInventory.EMPTY;
+            if (stagedCounts[slot] == 0) {
+                stagedTypes[slot] = PlayerInventory.EMPTY;
+                stagedIdentities[slot] = StackSnapshot.EMPTY;
+            }
             if (slot == INPUT_SLOT) stagedCookTicks = 0;
             return moved;
         }
@@ -663,6 +731,7 @@ public final class FurnaceInventory {
                 if (amount != 0) return false;
                 stagedTypes[slot] = PlayerInventory.EMPTY;
                 stagedCounts[slot] = 0;
+                stagedIdentities[slot] = StackSnapshot.EMPTY;
                 if (slot == INPUT_SLOT) stagedCookTicks = 0;
                 return true;
             }
@@ -673,14 +742,16 @@ public final class FurnaceInventory {
                     || slot == OUTPUT_SLOT && !FurnaceRules.isSmeltOutput(type)) return false;
             stagedTypes[slot] = type;
             stagedCounts[slot] = amount;
+            stagedIdentities[slot] = plain(type, 1);
             if (slot == INPUT_SLOT) stagedCookTicks = 0;
             return true;
         }
 
         public boolean replace(int slot, PlayerInventory.StackSnapshot stack) {
             checkOpen();
-            if (!isTypeCountCarrier(stack)) return false;
-            return replace(slot, stack.itemType(), stack.count());
+            if (stack == null || !replace(slot, stack.itemType(), stack.count())) return false;
+            stagedIdentities[slot] = stack.isEmpty() ? StackSnapshot.EMPTY : stack.withCount(1);
+            return true;
         }
 
         public boolean clear(int slot) {
@@ -711,6 +782,7 @@ public final class FurnaceInventory {
                 preflightRevisionCapacity();
                 short[] oldTypes = itemType.clone();
                 int[] oldCounts = count.clone();
+                StackSnapshot[] oldIdentities = identities.clone();
                 int oldBurnTicks = burnTicks;
                 int oldBurnTotalTicks = burnTotalTicks;
                 int oldCookTicks = cookTicks;
@@ -720,6 +792,7 @@ public final class FurnaceInventory {
                 try {
                     System.arraycopy(stagedTypes, 0, itemType, 0, SLOTS);
                     System.arraycopy(stagedCounts, 0, count, 0, SLOTS);
+                    System.arraycopy(stagedIdentities, 0, identities, 0, SLOTS);
                     burnTicks = stagedBurnTicks;
                     burnTotalTicks = stagedBurnTotalTicks;
                     cookTicks = stagedCookTicks;
@@ -733,6 +806,7 @@ public final class FurnaceInventory {
                 } catch (RuntimeException | Error failure) {
                     System.arraycopy(oldTypes, 0, itemType, 0, SLOTS);
                     System.arraycopy(oldCounts, 0, count, 0, SLOTS);
+                    System.arraycopy(oldIdentities, 0, identities, 0, SLOTS);
                     burnTicks = oldBurnTicks;
                     burnTotalTicks = oldBurnTotalTicks;
                     cookTicks = oldCookTicks;
@@ -754,7 +828,8 @@ public final class FurnaceInventory {
         }
 
         private boolean hasChanges() {
-            return !Arrays.equals(originTypes, stagedTypes)
+            return !Arrays.equals(originIdentities, stagedIdentities)
+                    || !Arrays.equals(originTypes, stagedTypes)
                     || !Arrays.equals(originCounts, stagedCounts)
                     || stagedBurnTicks != originBurnTicks
                     || stagedBurnTotalTicks != originBurnTotalTicks
@@ -766,7 +841,8 @@ public final class FurnaceInventory {
             return persistenceRevision == baseRevision && restoreState == baseRestoreState
                     && xpMilli == originXpMilli && burnTicks == originBurnTicks
                     && burnTotalTicks == originBurnTotalTicks && cookTicks == originCookTicks
-                    && Arrays.equals(itemType, originTypes) && Arrays.equals(count, originCounts);
+                    && Arrays.equals(itemType, originTypes) && Arrays.equals(count, originCounts)
+                    && Arrays.equals(identities, originIdentities);
         }
 
         private void checkOpen() {
@@ -776,11 +852,31 @@ public final class FurnaceInventory {
 
     /** 전체 furnace 상태의 불변 값 사본입니다. 배열 accessor는 매번 clone을 반환합니다. */
     public record Snapshot(short[] itemTypes, int[] counts, int burnTicks, int burnTotalTicks,
-            int cookTicks, FurnaceVariant variant, long revision, int xpMilli) {
+            int cookTicks, FurnaceVariant variant, long revision, int xpMilli, StackSnapshot[] stacks) {
+        public Snapshot(short[] itemTypes, int[] counts, int burnTicks, int burnTotalTicks,
+                int cookTicks, FurnaceVariant variant, long revision, int xpMilli) {
+            this(itemTypes, counts, burnTicks, burnTotalTicks, cookTicks, variant, revision, xpMilli, null);
+        }
+
+        public Snapshot withRevision(long nextRevision) {
+            return new Snapshot(itemTypes, counts, burnTicks, burnTotalTicks, cookTicks,
+                    variant, nextRevision, xpMilli, stacks);
+        }
+
         public Snapshot {
             itemTypes = itemTypes == null ? null : itemTypes.clone();
             counts = counts == null ? null : counts.clone();
+            if (stacks == null && itemTypes != null && counts != null
+                    && itemTypes.length == SLOTS && counts.length == SLOTS) {
+                stacks = new StackSnapshot[SLOTS];
+                for (int slot = 0; slot < SLOTS; slot++) stacks[slot] = plain(itemTypes[slot], counts[slot]);
+            } else if (stacks != null) {
+                if (stacks.length != SLOTS) throw new IllegalArgumentException("three furnace stacks required");
+                stacks = stacks.clone();
+            }
         }
+
+        @Override public StackSnapshot[] stacks() { return stacks == null ? null : stacks.clone(); }
 
         @Override public short[] itemTypes() {
             return itemTypes == null ? null : itemTypes.clone();
@@ -797,7 +893,8 @@ public final class FurnaceInventory {
                     && cookTicks == that.cookTicks && revision == that.revision
                     && xpMilli == that.xpMilli && variant == that.variant
                     && Arrays.equals(itemTypes, that.itemTypes)
-                    && Arrays.equals(counts, that.counts);
+                    && Arrays.equals(counts, that.counts)
+                    && Arrays.equals(stacks, that.stacks);
         }
 
         @Override public int hashCode() {
@@ -808,7 +905,7 @@ public final class FurnaceInventory {
             result = 31 * result + cookTicks;
             result = 31 * result + Objects.hashCode(variant);
             result = 31 * result + Long.hashCode(revision);
-            return 31 * result + xpMilli;
+            return 31 * (31 * result + xpMilli) + Arrays.hashCode(stacks);
         }
     }
 
@@ -866,20 +963,12 @@ public final class FurnaceInventory {
     }
 
     public static final class StoredStack {
-        private final short itemType;
-        private final int count;
+        private final StackSnapshot stack;
 
-        public StoredStack(short itemType, int count) {
-            this.itemType = itemType;
-            this.count = count;
-        }
-
-        public short itemType() {
-            return itemType;
-        }
-
-        public int count() {
-            return count;
-        }
+        public StoredStack(short itemType, int count) { this(plain(itemType, count)); }
+        public StoredStack(StackSnapshot stack) { this.stack = Objects.requireNonNull(stack); }
+        public StackSnapshot stack() { return stack; }
+        public short itemType() { return stack.itemType(); }
+        public int count() { return stack.count(); }
     }
 }

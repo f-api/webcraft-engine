@@ -1364,16 +1364,19 @@ public final class ExplosionSettlementCommand {
                 List<ContainerDrop> drops, long expectedRevision) {
             short[] itemTypes = new short[drops.size()];
             int[] counts = new int[drops.size()];
+            PlayerInventory.StackSnapshot[] stacks = new PlayerInventory.StackSnapshot[drops.size()];
             for (int slot = 0; slot < drops.size(); slot++) {
                 ContainerStack stack = drops.get(slot).source();
-                requireComponentless(stack, "furnace");
+                stacks[slot] = new PlayerInventory.StackSnapshot(stack.itemType(), stack.count(),
+                        stack.durability(), stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                        stack.bucketMobData(), stack.itemComponentData());
                 itemTypes[slot] = stack.itemType();
                 counts[slot] = stack.count();
             }
             FurnaceVariant variant = furnaceVariant(state.variantCode());
-            new FurnaceInventory(variant).restore(itemTypes, counts, state.burnTicks(),
+            new FurnaceInventory(variant).restore(new FurnaceInventory.Snapshot(itemTypes, counts, state.burnTicks(),
                     state.burnTotalTicks(), state.cookTicks(), variant,
-                    expectedRevision, state.xpMilli());
+                    expectedRevision, state.xpMilli(), stacks));
         }
 
         private static void validateBrewingSlots(

@@ -24,6 +24,7 @@ import com.gameexpert.state.service.inventory.InventoryMutationTarget;
 import com.gameexpert.state.service.inventory.StaleInventoryMutationException;
 
 import com.gameexpert.engine.FurnaceInventory;
+import com.gameexpert.engine.inventory.PlayerInventory.StackSnapshot;
 import com.gameexpert.engine.FurnaceStorage;
 import com.gameexpert.engine.FurnaceVariant;
 import com.gameexpert.engine.PersistenceExecutor;
@@ -39,7 +40,7 @@ public class FurnacePersistenceService {
 
     public enum GeneratedInstallOutcome { COMMITTED, IDEMPOTENT }
 
-    /** Furnace slots are componentless today, but the witness spells out the complete item identity. */
+    /** Exact retirement witnesses carry the same full identity as persisted furnace slots. */
     public record ExactSlot(short itemType, int count, int durability, long enchantments,
             int mapId, int shulkerId, String bucketMobData, String itemComponentData) {
         public ExactSlot {
@@ -52,6 +53,11 @@ public class FurnacePersistenceService {
             return new ExactSlot(itemType, count,
                     com.gameexpert.engine.inventory.PlayerInventory.initialDurability(itemType),
                     0L, 0, 0, null, null);
+        }
+
+        public StackSnapshot stack() {
+            return new StackSnapshot(itemType, count, durability, enchantments, mapId,
+                    shulkerId, bucketMobData, itemComponentData);
         }
 
         private boolean isComponentless() {
@@ -113,10 +119,7 @@ public class FurnacePersistenceService {
     @Transactional(propagation = Propagation.MANDATORY)
     public void replaceExactSnapshotJoiningTransaction(Long worldId,
             InventoryMutationTarget.Furnace snapshot) {
-        // InventoryMutationTarget.Furnace predates the persisted XP field. Keep this entry point
-        // source-compatible until its caller carries xpMilli, but make the exact overload below
-        // the only path that can persist a non-zero pending XP value.
-        replaceExactSnapshotJoiningTransaction(worldId, snapshot, 0);
+        replaceExactSnapshotJoiningTransaction(worldId, snapshot, snapshot.xpMilli());
     }
 
     /** Persists a furnace snapshot with the exact pending smelt XP value. */
@@ -127,9 +130,7 @@ public class FurnacePersistenceService {
         WorldFurnace entity = repository
                 .findLockedByWorldIdAndPosXAndPosYAndPosZ(worldId, pos.x(), pos.y(), pos.z())
                 .orElseGet(() -> new WorldFurnace(worldId, pos.x(), pos.y(), pos.z()));
-        if (!entity.replaceIfNewer(snapshot.itemTypes(), snapshot.counts(), snapshot.burnTicks(),
-                snapshot.burnTotalTicks(), snapshot.cookTicks(), snapshot.variantCode(),
-                xpMilli, snapshot.revision())) {
+        if (!entity.replaceIfNewer(contents(snapshot, xpMilli))) {
             throw new StaleInventoryMutationException("furnace " + pos);
         }
         repository.save(entity);
@@ -160,10 +161,8 @@ public class FurnacePersistenceService {
     @Transactional(propagation = Propagation.MANDATORY)
     public boolean replaceExactSnapshotAtExpectedRevisionJoiningTransaction(Long worldId,
             InventoryMutationTarget.Furnace snapshot, long expectedRevision) {
-        // See replaceExactSnapshotJoiningTransaction(Long, Furnace): callers must migrate to the
-        // overload carrying xpMilli before a non-zero XP remainder can enter this target path.
         return replaceExactSnapshotAtExpectedRevisionJoiningTransaction(
-                worldId, snapshot, 0, expectedRevision);
+                worldId, snapshot, snapshot.xpMilli(), expectedRevision);
     }
 
     /** CAS variant that compares and applies slots, progress, revision and pending XP together. */
@@ -180,9 +179,7 @@ public class FurnacePersistenceService {
             throw new IllegalArgumentException("furnace revision must advance expected revision once");
         }
         if (entity == null) entity = new WorldFurnace(worldId, pos.x(), pos.y(), pos.z());
-        if (!entity.replaceIfNewer(snapshot.itemTypes(), snapshot.counts(), snapshot.burnTicks(),
-                snapshot.burnTotalTicks(), snapshot.cookTicks(), snapshot.variantCode(),
-                xpMilli, snapshot.revision())) {
+        if (!entity.replaceIfNewer(contents(snapshot, xpMilli))) {
             throw new IllegalStateException("validated furnace revision changed in transaction");
         }
         repository.save(entity);
@@ -208,7 +205,10 @@ public class FurnacePersistenceService {
         int[] counts = snapshot.counts();
         List<ExactSlot> slots = new ArrayList<>(FurnaceInventory.SLOTS);
         for (int slot = 0; slot < FurnaceInventory.SLOTS; slot++) {
-            slots.add(ExactSlot.componentless(types[slot], counts[slot]));
+            StackSnapshot value = snapshot.stacks()[slot];
+            slots.add(new ExactSlot(value.itemType(), value.count(), value.durability(),
+                    value.enchantments(), value.mapId(), value.shulkerId(),
+                    value.bucketMobData(), value.itemComponentData()));
         }
         return new ExactRetirementTarget(binding.rowId(), x, y, z, binding.revision(),
                 snapshot.variant().code(), snapshot.burnTicks(), snapshot.burnTotalTicks(),
@@ -250,19 +250,19 @@ public class FurnacePersistenceService {
                     worldId, target.x(), target.y(), target.z()).orElse(null);
             short[] types = new short[FurnaceInventory.SLOTS];
             int[] counts = new int[FurnaceInventory.SLOTS];
-            boolean componentComplete = true;
+            StackSnapshot[] stacks = new StackSnapshot[FurnaceInventory.SLOTS];
             for (int slot = 0; slot < FurnaceInventory.SLOTS; slot++) {
                 ExactSlot expected = target.slots().get(slot);
                 types[slot] = expected.itemType();
                 counts[slot] = expected.count();
-                componentComplete &= expected.isComponentless();
+                stacks[slot] = expected.stack();
             }
-            if (!componentComplete || entity == null
+            if (entity == null
                     || !Objects.equals(entity.getId(), target.rowId())
                     || !Objects.equals(entity.getWorldId(), worldId)
-                    || !entity.matchesExact(types, counts, target.burnTicks(),
-                            target.burnTotalTicks(), target.cookTicks(), target.variantCode(),
-                            target.xpMilli(), target.expectedRevision())) {
+                    || !entity.matchesExact(new FurnaceInventory.Snapshot(types, counts, target.burnTicks(),
+                            target.burnTotalTicks(), target.cookTicks(), FurnaceVariant.fromCode(target.variantCode()),
+                            target.expectedRevision(), target.xpMilli(), stacks))) {
                 throw new StaleInventoryMutationException(
                         "stale exact furnace retirement at " + target.x() + ":"
                                 + target.y() + ":" + target.z());
@@ -288,11 +288,7 @@ public class FurnacePersistenceService {
             // [FURNACE-VARIANT] 변형 열이 없던 시절 행은 0 → 화로로 읽힌다(WorldFurnace 참조).
             FurnaceInventory furnace =
                     new FurnaceInventory(FurnaceVariant.fromCode(entity.getVariantCode()));
-            furnace.restore(
-                    new short[] { entity.getInputType(), entity.getFuelType(), entity.getOutputType() },
-                    new int[] { entity.getInputCount(), entity.getFuelCount(), entity.getOutputCount() },
-                    entity.getBurnTicks(), entity.getBurnTotalTicks(), entity.getCookTicks(),
-                    entity.getVariantCode(), entity.getPersistenceRevision(), entity.getXpMilli());
+            furnace.restore(entity.snapshot());
             storage.load(entity.getPosX(), entity.getPosY(), entity.getPosZ(), furnace);
             rememberBinding(worldId, entity.getPosX(), entity.getPosY(), entity.getPosZ(), entity);
         }
@@ -327,15 +323,7 @@ public class FurnacePersistenceService {
                 snapshots.add(FurnaceSnapshot.deleted(pos[0], pos[1], pos[2]));
                 continue;
             }
-            short[] types = new short[FurnaceInventory.SLOTS];
-            int[] counts = new int[FurnaceInventory.SLOTS];
-            for (int slot = 0; slot < FurnaceInventory.SLOTS; slot++) {
-                types[slot] = furnace.itemType(slot);
-                counts[slot] = furnace.count(slot);
-            }
-            snapshots.add(new FurnaceSnapshot(pos[0], pos[1], pos[2], types, counts,
-                    furnace.burnTicks(), furnace.burnTotalTicks(), furnace.cookTicks(),
-                    furnace.variant().code(), furnace.xpMilli(), false, furnace.persistenceRevision()));
+            snapshots.add(new FurnaceSnapshot(pos[0], pos[1], pos[2], furnace.snapshot(), false));
         }
         if (snapshots.isEmpty() && !carryDirty) return;
         boolean accepted = persistenceExecutor.trySubmit(() -> {
@@ -411,9 +399,7 @@ public class FurnacePersistenceService {
             if (entity == null) {
                 entity = new WorldFurnace(worldId, snapshot.x, snapshot.y, snapshot.z);
             }
-            if (entity.replaceIfNewer(snapshot.itemTypes, snapshot.counts,
-                    snapshot.burnTicks, snapshot.burnTotalTicks, snapshot.cookTicks,
-                    snapshot.variantCode, snapshot.xpMilli, snapshot.revision)) changed.add(entity);
+            if (entity.replaceIfNewer(snapshot.state)) changed.add(entity);
         }
         if (!deleted.isEmpty()) repository.deleteAll(deleted);
         if (!changed.isEmpty()) repository.saveAll(changed);
@@ -477,41 +463,15 @@ public class FurnacePersistenceService {
         return x + ":" + y + ":" + z;
     }
 
-    private static final class FurnaceSnapshot {
-        private final int x;
-        private final int y;
-        private final int z;
-        private final short[] itemTypes;
-        private final int[] counts;
-        private final int burnTicks;
-        private final int burnTotalTicks;
-        private final int cookTicks;
-        private final int variantCode;
-        private final int xpMilli;
-        private final boolean deleted;
-        private final long revision;
+    private static FurnaceInventory.Snapshot contents(InventoryMutationTarget.Furnace snapshot, int xpMilli) {
+        return new FurnaceInventory.Snapshot(snapshot.itemTypes(), snapshot.counts(),
+                snapshot.burnTicks(), snapshot.burnTotalTicks(), snapshot.cookTicks(),
+                FurnaceVariant.fromCode(snapshot.variantCode()), snapshot.revision(), xpMilli, snapshot.stacks());
+    }
 
-        private FurnaceSnapshot(int x, int y, int z, short[] itemTypes, int[] counts,
-                int burnTicks, int burnTotalTicks, int cookTicks, int variantCode,
-                int xpMilli, boolean deleted, long revision) {
-            this.x = x;
-            this.y = y;
-            this.z = z;
-            this.itemTypes = itemTypes.clone();
-            this.counts = counts.clone();
-            this.burnTicks = burnTicks;
-            this.burnTotalTicks = burnTotalTicks;
-            this.cookTicks = cookTicks;
-            this.variantCode = variantCode;
-            this.xpMilli = xpMilli;
-            this.deleted = deleted;
-            this.revision = revision;
-        }
-
+    private record FurnaceSnapshot(int x, int y, int z, FurnaceInventory.Snapshot state, boolean deleted) {
         private static FurnaceSnapshot deleted(int x, int y, int z) {
-            return new FurnaceSnapshot(
-                    x, y, z, new short[3], new int[3], 0, 0, 0,
-                    FurnaceVariant.FURNACE.code(), 0, true, 0);
+            return new FurnaceSnapshot(x, y, z, null, true);
         }
     }
 }

@@ -67,11 +67,13 @@ public final class FurnaceStorage {
 
     public List<FurnaceInventory.StoredStack> removeAt(int x, int y, int z) {
         long key = key(x, y, z);
-        FurnaceInventory removed = furnaces.remove(key);
+        FurnaceInventory removed = furnaces.get(key);
+        List<FurnaceInventory.StoredStack> stacks = removed == null ? List.of() : removed.drainAll();
+        furnaces.remove(key);
         ticking.remove(key);
         unindex(key, x, z);
         markDirty(x, y, z);
-        return removed == null ? List.of() : removed.drainAll();
+        return stacks;
     }
 
     public void activate(int x, int y, int z) {

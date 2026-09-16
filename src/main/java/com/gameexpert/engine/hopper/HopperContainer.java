@@ -54,6 +54,15 @@ public interface HopperContainer {
 
     void removeOne(int slot);
 
+    /** Validate an imminent destination write before a source can durably consume an item. */
+    default void preflightTransfer(int slot) { }
+
+    /** Runtime inventories override this to roll back only this removal on insertion failure. */
+    default void removeOneAndInsert(int slot, Runnable insertion) {
+        removeOne(slot);
+        insertion.run();
+    }
+
     /**
      * The vanilla failed-take path restores the source count and, for a single item, calls
      * {@code setItem} again. Only {@code SimpleContainer} (the composter output) observes that:

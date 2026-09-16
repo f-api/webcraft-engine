@@ -65,13 +65,17 @@ public final class HopperTransfer {
         HopperCooldown cooldown = requireHopper(hopper);
         if (cooldown.isOnCooldown() || !HopperRules.enabled(state)) return false;
         boolean moved = false;
-        if (!hopper.isEmpty()) moved = ejectItems(hopper, state, world);
-        // Vanilla uses a non-short-circuit OR: a push does not skip the pull.
-        if (!inventoryFull(hopper)) moved |= suck.getAsBoolean();
-        if (!moved) return false;
-        cooldown.setCooldown(HopperRules.MOVE_ITEM_SPEED);
-        hopper.setChanged();
-        return true;
+        try {
+            if (!hopper.isEmpty()) moved = ejectItems(hopper, state, world);
+            // A successful push remains committed when a later pull fails.
+            if (!inventoryFull(hopper)) moved |= suck.getAsBoolean();
+            return moved;
+        } finally {
+            if (moved) {
+                cooldown.setCooldown(HopperRules.MOVE_ITEM_SPEED);
+                hopper.setChanged();
+            }
+        }
     }
 
     /** {@code HopperBlockEntity.inventoryFull}. */
@@ -93,10 +97,13 @@ public final class HopperTransfer {
             HopperStack stack = hopper.get(slot);
             if (stack.isEmpty()) continue;
             HopperStack one = stack.withCount(1);
-            if (firstAcceptingSlot(destination, one, face) < 0) continue;
-            hopper.removeOne(slot);
-            HopperStack remainder = addItem(hopper, destination, one, face);
-            if (!remainder.isEmpty()) throw new IllegalStateException("hopper eject diverged");
+            int targetSlot = firstAcceptingSlot(destination, one, face);
+            if (targetSlot < 0) continue;
+            destination.preflightTransfer(targetSlot);
+            hopper.removeOneAndInsert(slot, () -> {
+                HopperStack remainder = addItem(hopper, destination, one, face);
+                if (!remainder.isEmpty()) throw new IllegalStateException("hopper eject diverged");
+            });
             destination.setChanged();
             return true;
         }
@@ -107,7 +114,7 @@ public final class HopperTransfer {
     public static boolean isFullContainer(HopperContainer container, int face) {
         for (int slot : slots(container, face)) {
             HopperStack stack = container.get(slot);
-            if (stack.count() < stack.maxStackSize()) return false;
+            if (stack.count() < Math.min(container.maxStackSize(), stack.maxStackSize())) return false;
         }
         return true;
     }
@@ -137,21 +144,27 @@ public final class HopperTransfer {
             return false;
         }
         HopperStack one = stack.withCount(1);
-        if (firstAcceptingSlot(hopper, one, HopperRules.NO_FACE) < 0) {
+        int targetSlot = firstAcceptingSlot(hopper, one, HopperRules.NO_FACE);
+        if (targetSlot < 0) {
             source.failedRemoveAttempt(slot);
             return false;
         }
-        source.removeOne(slot);
-        HopperStack remainder = addItem(source, hopper, one, HopperRules.NO_FACE);
-        if (!remainder.isEmpty()) throw new IllegalStateException("hopper take diverged");
+        hopper.preflightTransfer(targetSlot);
+        source.removeOneAndInsert(slot, () -> {
+            HopperStack remainder = addItem(source, hopper, one, HopperRules.NO_FACE);
+            if (!remainder.isEmpty()) throw new IllegalStateException("hopper take diverged");
+        });
         source.setChanged();
         return true;
     }
 
     /** {@code HopperBlockEntity.addItem(Container, ItemEntity)}. */
     public static boolean addItem(HopperContainer destination, Item item) {
-        HopperStack remainder = addItem(null, destination, item.stack(), HopperRules.NO_FACE);
-        item.setStack(remainder);
+        HopperStack remainder = item.stack();
+        for (int slot = 0; slot < destination.size() && !remainder.isEmpty(); slot++) {
+            remainder = tryMoveInItem(null, destination, remainder, slot, HopperRules.NO_FACE);
+            item.setStack(remainder);
+        }
         return remainder.isEmpty();
     }
 
@@ -181,11 +194,13 @@ public final class HopperTransfer {
         boolean wasEmpty = destination.isEmpty();
         if (current.isEmpty()) {
             int limit = Math.min(destination.maxStackSize(), stack.maxStackSize());
-            destination.setItem(slot, stack.withCount(Math.min(stack.count(), limit)));
-            stack = HopperStack.EMPTY;
+            int moved = Math.min(stack.count(), limit);
+            if (moved <= 0) return stack;
+            destination.setItem(slot, stack.withCount(moved));
+            stack = stack.withCount(stack.count() - moved);
             changed = true;
         } else if (canMergeItems(current, stack)) {
-            int space = stack.maxStackSize() - current.count();
+            int space = Math.min(destination.maxStackSize(), stack.maxStackSize()) - current.count();
             int moved = Math.min(stack.count(), space);
             if (moved > 0) {
                 destination.grow(slot, moved);
@@ -219,8 +234,9 @@ public final class HopperTransfer {
         for (int slot : order) {
             if (!canPlaceItemInContainer(destination, one, slot, face)) continue;
             HopperStack current = destination.get(slot);
-            if (current.isEmpty()) return slot;
-            if (canMergeItems(current, one) && one.maxStackSize() - current.count() > 0) {
+            int limit = Math.min(destination.maxStackSize(), one.maxStackSize());
+            if (current.isEmpty() && limit > 0) return slot;
+            if (canMergeItems(current, one) && limit - current.count() > 0) {
                 return slot;
             }
         }

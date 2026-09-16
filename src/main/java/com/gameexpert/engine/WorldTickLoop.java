@@ -6554,8 +6554,10 @@ public final class WorldTickLoop {
             rt.furnaceStorage().removeAt(x, y, z);
         }
         for (FurnaceInventory.StoredStack stack : stacks) {
-            rt.itemSystem().spawnDrop(
-                    stack.itemType(), stack.count(), x + 0.5, y + 0.5, z + 0.5);
+            PlayerInventory.StackSnapshot value = stack.stack();
+            rt.itemSystem().spawnDrop(value.itemType(), value.count(), value.durability(),
+                    value.enchantments(), value.mapId(), value.shulkerId(), value.bucketMobData(),
+                    value.itemComponentData(), x + 0.5, y + 0.5, z + 0.5);
         }
         if (drained != null) rt.publishRemovedFurnaceXp(drained, x + 0.5, y + 0.5, z + 0.5);
     }
@@ -10895,7 +10897,7 @@ public final class WorldTickLoop {
                     new InventoryMutationTarget.Position(pos.x(), pos.y(), pos.z()),
                     furnaceTypes(finalPlan), furnaceCounts(finalPlan), finalPlan.burnTicks(),
                     finalPlan.burnTotalTicks(), finalPlan.cookTicks(), finalPlan.variant().code(),
-                    finalPlan.xpMilli(), targetRevision);
+                    finalPlan.xpMilli(), targetRevision, finalPlan.snapshot().stacks());
             command = new PlayerContainerSettlementCommand(
                     WorldRuntime.stablePlayerContainerSettlementId(
                             player.playerId(), source.revision()),
@@ -10996,7 +10998,8 @@ public final class WorldTickLoop {
                 && left.cookTicks() == right.cookTicks()
                 && left.xpMilli() == right.xpMilli()
                 && Arrays.equals(left.itemTypes(), right.itemTypes())
-                && Arrays.equals(left.counts(), right.counts());
+                && Arrays.equals(left.counts(), right.counts())
+                && Arrays.equals(left.stacks(), right.stacks());
     }
 
     private static boolean stageFurnaceSlots(FurnaceInventory.StagedCommand staged,
@@ -11007,11 +11010,10 @@ public final class WorldTickLoop {
         int[] afterCounts = after.counts();
         boolean changed = false;
         for (int slot = 0; slot < FurnaceInventory.SLOTS; slot++) {
-            if (beforeTypes[slot] == afterTypes[slot]
-                    && beforeCounts[slot] == afterCounts[slot]) continue;
+            if (before.stacks()[slot].equals(after.stacks()[slot])) continue;
             boolean accepted = afterTypes[slot] == PlayerInventory.EMPTY
                     ? staged.clear(slot)
-                    : staged.replace(slot, afterTypes[slot], afterCounts[slot]);
+                    : staged.replace(slot, after.stacks()[slot]);
             if (!accepted) return false;
             changed = true;
         }
@@ -11044,9 +11046,7 @@ public final class WorldTickLoop {
     private static FurnaceInventory detachedFurnace(FurnaceInventory source, long revision) {
         FurnaceInventory.Snapshot snapshot = source.snapshot();
         FurnaceInventory copy = new FurnaceInventory(snapshot.variant());
-        copy.restore(snapshot.itemTypes(), snapshot.counts(), snapshot.burnTicks(),
-                snapshot.burnTotalTicks(), snapshot.cookTicks(), snapshot.variant(), revision,
-                snapshot.xpMilli());
+        copy.restore(snapshot.withRevision(revision));
         return copy;
     }
 
@@ -11435,11 +11435,12 @@ public final class WorldTickLoop {
     private static List<InventorySlot> furnaceSlots(FurnaceInventory furnace) {
         List<InventorySlot> slots = new ArrayList<>(FurnaceInventory.SLOTS);
         for (int slot = 0; slot < FurnaceInventory.SLOTS; slot++) {
-            slots.add(new InventorySlot(
-                    slot, furnace.itemType(slot), furnace.count(slot),
-                    PlayerInventory.isDurable(furnace.itemType(slot))
-                            ? PlayerInventory.initialDurability(furnace.itemType(slot)) : null,
-                    0, null, null, null, null, List.of(), null, 0, null, null, null));
+            PlayerInventory.StackSnapshot stack = furnace.stack(slot);
+            slots.add(inventorySlot(slot, stack.itemType(), stack.count(),
+                    PlayerInventory.isDurable(stack.itemType()) ? stack.durability() : null,
+                    stack.enchantments(), stack.mapId() == 0 ? null : stack.mapId(),
+                    stack.shulkerId() == 0 ? null : stack.shulkerId(), stack.bucketMobData(),
+                    stack.itemComponentData()));
         }
         return slots;
     }

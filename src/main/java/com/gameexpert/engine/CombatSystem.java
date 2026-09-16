@@ -212,7 +212,9 @@ final class CombatSystem {
         // [SPEAR][B] 창은 **크리티컬이 아예 나지 않는다**(핀 §5 원문: 잽은 "cannot do critical
         // hits or sprint-knockback attacks"). 그래서 낙하 조건이 성립해도 ×1.5 를 곱하지 않고
         // 파티클 조건도 성립시키지 않는다 — 조건 자체를 여기서 끈다.
-        boolean critical = player.airborne() && player.fallPeakY() > player.y() && !sprinting
+        // Player.attack requires > 90% charge for critical and sprint-knockback bonuses.
+        boolean strongAttack = CombatRules.attackStrengthScale(weapon, elapsed, firstAttack) > 0.9;
+        boolean critical = strongAttack && player.canCriticalStrike(sprinting)
                 && !SpearRules.suppressesCritical(weapon);
         if (critical) dmg *= 1.5;
         double enchantmentBonus = CombatRules.enchantmentMeleeBonus(
@@ -267,7 +269,7 @@ final class CombatSystem {
                         com.gameexpert.engine.enchant.EnchantmentRules.KNOCKBACK, weapon)
                         ? weaponEnchantments.level(
                                 com.gameexpert.engine.enchant.EnchantmentRules.KNOCKBACK) : 0,
-                sprinting && !SpearRules.suppressesSprintKnockback(weapon));
+                strongAttack && sprinting && !SpearRules.suppressesSprintKnockback(weapon));
         if (knockbackSteps > 0) {
             double perTick = CombatRules.KNOCKBACK_BONUS_BPS / 10.0 * knockbackSteps;
             // 추가 넓백은 가해자 시선 수평 방향의 별도 2차 호출.

@@ -172,7 +172,6 @@ final class HopperSystem {
         int state = refreshEnabled(pos, rt.blockStates().get(pos.x(), pos.y(), pos.z(), Blocks.HOPPER));
         HopperAdapter hopper = hopperAt(pos);
         World world = new World(pos, state);
-        ChestInventory.PersistenceSnapshot before = hopper.inventory.persistenceSnapshot();
         try {
             for (ItemEntity item : rt.itemSystem().hopperSuckCandidates(
                     pos.x(), pos.y(), pos.z(), true)) {
@@ -180,26 +179,7 @@ final class HopperSystem {
             }
             HopperTransfer.pushItemsTick(hopper, state, gameTime, world);
         } catch (MutationRejected rejected) {
-            // The only fallible neighbour (a brewing stand's synchronous write) refused before it
-            // changed. Undo the hopper side of the same move; the cooldown stays where the failed
-            // attempt left it, exactly as a tick in which nothing moved.
-            restore(hopper.inventory, before);
-            rt.chestStorage().markDirty(pos.x(), pos.y(), pos.z());
-        }
-    }
-
-    private static void restore(ChestInventory inventory, ChestInventory.PersistenceSnapshot before) {
-        ChestInventory.Snapshot contents = before.snapshot();
-        for (int slot = 0; slot < inventory.slots(); slot++) {
-            int current = inventory.count(slot);
-            if (current > 0) inventory.take(slot, current);
-            short type = contents.itemTypes()[slot];
-            int count = contents.counts()[slot];
-            if (type == PlayerInventory.EMPTY || count <= 0) continue;
-            inventory.putInSlot(slot, type, count, contents.durabilities()[slot],
-                    contents.enchantments()[slot], contents.mapIds()[slot],
-                    contents.shulkerIds()[slot], contents.bucketMobData()[slot],
-                    contents.itemComponentData()[slot]);
+            // The failed move restores its own source. Earlier successful moves remain committed.
         }
     }
 
@@ -649,6 +629,21 @@ final class HopperSystem {
             touched(slot);
         }
 
+        @Override
+        public void preflightTransfer(int slot) {
+            if (inventories.get(half(slot)).persistenceRevision() == Long.MAX_VALUE) {
+                throw new IllegalStateException("hopper destination revision is exhausted");
+            }
+        }
+
+        @Override
+        public void removeOneAndInsert(int slot, Runnable insertion) {
+            inventories.get(half(slot)).runAtomicTransfer(() -> {
+                removeOne(slot);
+                insertion.run();
+            });
+        }
+
         /** {@link com.gameexpert.engine.dispenser.CrafterRules#canPlaceItem} over this grid. */
         private boolean crafterCanPlaceItem(int slot) {
             int[] counts = new int[size];
@@ -688,7 +683,7 @@ final class HopperSystem {
         }
     }
 
-    /** {@code AbstractFurnaceBlockEntity} over the repository's type+count furnace storage. */
+    /** {@code AbstractFurnaceBlockEntity} over complete furnace stack storage. */
     private final class FurnaceAdapter implements HopperContainer {
         final BlockPos pos;
         final FurnaceVariant variant;
@@ -714,21 +709,19 @@ final class HopperSystem {
         @Override
         public HopperStack get(int slot) {
             if (furnace == null) return HopperStack.EMPTY;
-            return HopperStack.of(furnace.itemType(slot), furnace.count(slot));
+            PlayerInventory.StackSnapshot stack = furnace.stack(slot);
+            return new HopperStack(stack.itemType(), stack.count(), stack.durability(),
+                    stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                    stack.bucketMobData(), stack.itemComponentData());
         }
 
         /**
-         * Vanilla {@code canPlaceItem} narrowed to the repository furnace rows: they persist only
-         * type and count, the input slot holds a smeltable of this variant, the fuel slot a
-         * burnable (an empty bucket has no fuel row).
+         * Slot and variant rules apply to complete stacks; metadata never disqualifies valid fuel
+         * or recyclable equipment. The transfer's full-identity comparison governs merging.
          */
         @Override
         public boolean canPlaceItem(int slot, HopperStack stack) {
-            if (!HopperRules.furnaceCanPlaceItem(slot, stack, get(FurnaceInventory.FUEL_SLOT))
-                    || !FurnaceInventory.isTypeCountCarrier(new PlayerInventory.StackSnapshot(
-                            stack.itemType(), stack.count(), stack.durability(), stack.enchantments(),
-                            stack.mapId(), stack.shulkerId(), stack.bucketMobData(),
-                            stack.itemComponentData()))) return false;
+            if (!HopperRules.furnaceCanPlaceItem(slot, stack, get(FurnaceInventory.FUEL_SLOT))) return false;
             HopperStack current = get(slot);
             if (!current.isEmpty()) return true;
             FurnaceInventory probe = furnace != null ? furnace : new FurnaceInventory(variant);
@@ -737,7 +730,9 @@ final class HopperSystem {
 
         @Override
         public void setItem(int slot, HopperStack stack) {
-            if (writable().add(slot, stack.itemType(), stack.count()) != stack.count()) {
+            if (writable().add(slot, new PlayerInventory.StackSnapshot(stack.itemType(), stack.count(),
+                    stack.durability(), stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                    stack.bucketMobData(), stack.itemComponentData()), stack.count()) != stack.count()) {
                 throw new IllegalStateException("furnace setItem rejected");
             }
             touched();
@@ -745,7 +740,7 @@ final class HopperSystem {
 
         @Override
         public void grow(int slot, int amount) {
-            if (writable().add(slot, furnace.itemType(slot), amount) != amount) {
+            if (writable().add(slot, furnace.stack(slot).withCount(amount), amount) != amount) {
                 throw new IllegalStateException("furnace grow rejected");
             }
             touched();
@@ -757,6 +752,13 @@ final class HopperSystem {
                 throw new IllegalStateException("furnace take rejected");
             }
             touched();
+        }
+
+        @Override
+        public void preflightTransfer(int slot) {
+            if (furnace != null && furnace.persistenceRevision() == Long.MAX_VALUE) {
+                throw new IllegalStateException("furnace destination revision is exhausted");
+            }
         }
 
         private void touched() {
@@ -849,7 +851,7 @@ final class HopperSystem {
             BrewingInventory committed = new BrewingInventory();
             committed.restore(types, counts, components, planned.fuel(), brewTicks, ingredient);
             committed.restorePersistenceRevision(live.persistenceRevision() + 1);
-            var target = new InventoryMutationTarget.Brewing(
+            InventoryMutationTarget.Brewing target = new InventoryMutationTarget.Brewing(
                     new InventoryMutationTarget.Position(pos.x(), pos.y(), pos.z()), types, counts,
                     components, committed.fuel(), committed.brewTicks(),
                     committed.brewingIngredient(), committed.persistenceRevision());

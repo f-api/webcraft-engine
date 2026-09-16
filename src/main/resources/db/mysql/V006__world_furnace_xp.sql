@@ -186,6 +186,25 @@ SET @furnace_xp_column_exists = EXISTS(
       AND table_name = 'world_furnaces'
       AND column_name = 'xp_milli');
 
+-- Full-stack slots are Hibernate-owned and may be absent before its first update.
+-- Accept either the complete exact extension or no extension; reject partial/malformed shapes.
+SET @furnace_stack_column_count = (SELECT COUNT(*) FROM information_schema.columns
+    WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+      AND column_name IN ('input_durability', 'input_enchantments', 'input_map_id', 'input_shulker_id', 'input_bucket_mob_data', 'input_item_component_data', 'fuel_durability', 'fuel_enchantments', 'fuel_map_id', 'fuel_shulker_id', 'fuel_bucket_mob_data', 'fuel_item_component_data', 'output_durability', 'output_enchantments', 'output_map_id', 'output_shulker_id', 'output_bucket_mob_data', 'output_item_component_data'));
+SET @furnace_stack_columns_exact = (
+    @furnace_stack_column_count IN (0, 18)
+    AND (SELECT COUNT(*) FROM information_schema.columns
+         WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
+           AND column_name IN ('input_durability', 'input_enchantments', 'input_map_id', 'input_shulker_id', 'input_bucket_mob_data', 'input_item_component_data', 'fuel_durability', 'fuel_enchantments', 'fuel_map_id', 'fuel_shulker_id', 'fuel_bucket_mob_data', 'fuel_item_component_data', 'output_durability', 'output_enchantments', 'output_map_id', 'output_shulker_id', 'output_bucket_mob_data', 'output_item_component_data')
+           AND is_nullable = 'YES' AND column_default IS NULL AND extra = ''
+           AND COALESCE(generation_expression, '') = ''
+           AND ((column_name IN ('input_durability', 'fuel_durability', 'output_durability') AND data_type = 'int' AND column_type = 'int' AND numeric_precision = 10 AND numeric_scale = 0 AND character_set_name IS NULL AND collation_name IS NULL)
+                OR (column_name IN ('input_enchantments', 'fuel_enchantments', 'output_enchantments') AND data_type = 'bigint' AND column_type = 'bigint' AND numeric_precision = 19 AND numeric_scale = 0 AND character_set_name IS NULL AND collation_name IS NULL)
+                OR (column_name IN ('input_map_id', 'fuel_map_id', 'output_map_id') AND data_type = 'int' AND column_type = 'int' AND numeric_precision = 10 AND numeric_scale = 0 AND character_set_name IS NULL AND collation_name IS NULL)
+                OR (column_name IN ('input_shulker_id', 'fuel_shulker_id', 'output_shulker_id') AND data_type = 'int' AND column_type = 'int' AND numeric_precision = 10 AND numeric_scale = 0 AND character_set_name IS NULL AND collation_name IS NULL)
+                OR (column_name IN ('input_bucket_mob_data', 'fuel_bucket_mob_data', 'output_bucket_mob_data') AND data_type = 'varchar' AND column_type = 'varchar(512)' AND character_maximum_length = 512 AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_unicode_ci')
+                OR (column_name IN ('input_item_component_data', 'fuel_item_component_data', 'output_item_component_data') AND data_type = 'longtext' AND column_type = 'longtext' AND character_maximum_length = 4294967295 AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_unicode_ci'))) = @furnace_stack_column_count);
+
 -- All pre-existing columns must be the current WorldFurnace contract. Hibernate does not
 -- guarantee physical column order, so identity is the exact member set and per-column shape.
 SET @furnace_xp_base_columns_exact = IF(
@@ -196,7 +215,9 @@ SET @furnace_xp_base_columns_exact = IF(
          FROM information_schema.columns
          WHERE table_schema = DATABASE()
            AND table_name = 'world_furnaces'
-           AND column_name <> 'xp_milli') = 18
+           AND column_name <> 'xp_milli'
+           AND column_name NOT IN ('input_durability', 'input_enchantments', 'input_map_id', 'input_shulker_id', 'input_bucket_mob_data', 'input_item_component_data', 'fuel_durability', 'fuel_enchantments', 'fuel_map_id', 'fuel_shulker_id', 'fuel_bucket_mob_data', 'fuel_item_component_data', 'output_durability', 'output_enchantments', 'output_map_id', 'output_shulker_id', 'output_bucket_mob_data', 'output_item_component_data')) = 18
+        AND @furnace_stack_columns_exact = 1
         AND EXISTS (SELECT 1 FROM information_schema.columns
             WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
               AND column_name = 'id' AND data_type = 'bigint' AND column_type = 'bigint'
@@ -412,7 +433,8 @@ SET @furnace_xp_postcondition_exact = IF(
     1,
     IF(
         (SELECT COUNT(*) FROM information_schema.columns
-         WHERE table_schema = DATABASE() AND table_name = 'world_furnaces') = 19
+         WHERE table_schema = DATABASE() AND table_name = 'world_furnaces') = 19 + @furnace_stack_column_count
+        AND @furnace_stack_columns_exact = 1
         AND EXISTS (SELECT 1 FROM information_schema.columns
             WHERE table_schema = DATABASE() AND table_name = 'world_furnaces'
               AND column_name = 'xp_milli' AND data_type = 'int' AND column_type = 'int'

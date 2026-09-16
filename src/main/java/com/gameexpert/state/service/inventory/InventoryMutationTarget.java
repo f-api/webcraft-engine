@@ -71,7 +71,15 @@ public sealed interface InventoryMutationTarget {
 
     record Furnace(Position position, short[] itemTypes, int[] counts,
             int burnTicks, int burnTotalTicks, int cookTicks, int variantCode,
-            int xpMilli, long revision) implements InventoryMutationTarget {
+            int xpMilli, long revision, com.gameexpert.engine.inventory.PlayerInventory.StackSnapshot[] stacks)
+            implements InventoryMutationTarget {
+        public Furnace(Position position, short[] itemTypes, int[] counts,
+                int burnTicks, int burnTotalTicks, int cookTicks, int variantCode,
+                int xpMilli, long revision) {
+            this(position, itemTypes, counts, burnTicks, burnTotalTicks, cookTicks, variantCode,
+                    xpMilli, revision, null);
+        }
+
         public Furnace {
             if (position == null || revision <= 0 || revision == Long.MAX_VALUE
                     || itemTypes == null || itemTypes.length != 3
@@ -84,9 +92,18 @@ public sealed interface InventoryMutationTarget {
             }
             itemTypes = itemTypes.clone();
             counts = counts.clone();
+            FurnaceInventory validation = new FurnaceInventory(
+                    com.gameexpert.engine.FurnaceVariant.fromCode(variantCode));
+            FurnaceInventory.Snapshot value = new FurnaceInventory.Snapshot(itemTypes, counts,
+                    burnTicks, burnTotalTicks, cookTicks, validation.variant(), revision, xpMilli, stacks);
+            validation.restore(value);
+            stacks = value.stacks();
         }
         @Override public short[] itemTypes() { return itemTypes.clone(); }
         @Override public int[] counts() { return counts.clone(); }
+        @Override public com.gameexpert.engine.inventory.PlayerInventory.StackSnapshot[] stacks() {
+            return stacks.clone();
+        }
     }
 
     /**
