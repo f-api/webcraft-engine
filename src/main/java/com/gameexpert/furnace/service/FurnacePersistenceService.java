@@ -308,41 +308,85 @@ public class FurnacePersistenceService {
     public void flushDirty(Long worldId, FurnaceStorage storage,
             int carryMilli, long carryRevision, boolean carryDirty,
             LongConsumer carryAcknowledgement) {
+        DirtyCheckpoint checkpoint = captureDirty(worldId, storage, carryMilli, carryRevision,
+                carryDirty, carryAcknowledgement);
+        if (checkpoint.isEmpty()) return;
+        try {
+            boolean accepted = persistenceExecutor.trySubmit(() -> {
+                try {
+                    transactionTemplate.executeWithoutResult(status -> checkpoint.persist(false));
+                    checkpoint.committed();
+                } catch (RuntimeException | Error failure) {
+                    checkpoint.restoreDirty();
+                    log.warn("월드 {} 화로 flush 실패 — dirty 복원", worldId, failure);
+                }
+            });
+            if (!accepted) checkpoint.restoreDirty();
+        } catch (RuntimeException | Error failure) {
+            checkpoint.restoreDirty();
+            throw failure;
+        }
+    }
+
+    /** Captured on the owner thread; may join a chest checkpoint's transaction. */
+    public DirtyCheckpoint captureDirty(Long worldId, FurnaceStorage storage,
+            int carryMilli, long carryRevision, boolean carryDirty,
+            LongConsumer carryAcknowledgement) {
         requireWorldId(worldId);
         CarryState carry = new CarryState(carryMilli, carryRevision);
         if (carryDirty && carryRepository == null) {
             throw new IllegalStateException("world furnace XP carry repository is required");
         }
-        if (carryAcknowledgement == null) {
-            throw new IllegalArgumentException("carry acknowledgement is required");
-        }
-        List<FurnaceSnapshot> snapshots = new ArrayList<>();
-        for (int[] pos : storage.drainDirty()) {
-            FurnaceInventory furnace = storage.peekAt(pos[0], pos[1], pos[2]);
-            if (furnace == null) {
-                snapshots.add(FurnaceSnapshot.deleted(pos[0], pos[1], pos[2]));
-                continue;
+        Objects.requireNonNull(carryAcknowledgement, "carry acknowledgement is required");
+        List<int[]> drained = storage.drainDirty();
+        try {
+            List<FurnaceSnapshot> snapshots = new ArrayList<>();
+            for (int[] pos : drained) {
+                FurnaceInventory furnace = storage.peekAt(pos[0], pos[1], pos[2]);
+                snapshots.add(furnace == null
+                        ? FurnaceSnapshot.deleted(pos[0], pos[1], pos[2])
+                        : new FurnaceSnapshot(pos[0], pos[1], pos[2], furnace.snapshot(), false));
             }
-            snapshots.add(new FurnaceSnapshot(pos[0], pos[1], pos[2], furnace.snapshot(), false));
+            return new DirtyCheckpoint(worldId, storage, snapshots, carry, carryDirty,
+                    carryAcknowledgement);
+        } catch (RuntimeException | Error failure) {
+            storage.restoreDirty(drained);
+            throw failure;
         }
-        if (snapshots.isEmpty() && !carryDirty) return;
-        boolean accepted = persistenceExecutor.trySubmit(() -> {
-            try {
-                transactionTemplate.executeWithoutResult(status -> {
-                    persist(worldId, snapshots);
-                    if (carryDirty) persistCarry(worldId, carry);
-                });
-                if (carryDirty) carryAcknowledgement.accept(carry.revision());
-            } catch (RuntimeException exception) {
-                restoreDirty(storage, snapshots);
-                log.warn("월드 {} 화로 {}개 flush 실패 — dirty 좌표 복원",
-                        worldId, snapshots.size(), exception);
-            }
-        });
-        if (!accepted) {
-            restoreDirty(storage, snapshots);
-            log.warn("월드 {} 화로 flush 제출 거부 — dirty 좌표 {} 개 복원",
-                    worldId, snapshots.size());
+    }
+
+    public final class DirtyCheckpoint {
+        private final Long worldId;
+        private final FurnaceStorage storage;
+        private final List<FurnaceSnapshot> snapshots;
+        private final CarryState carry;
+        private final boolean carryDirty;
+        private final LongConsumer carryAcknowledgement;
+
+        private DirtyCheckpoint(Long worldId, FurnaceStorage storage,
+                List<FurnaceSnapshot> snapshots, CarryState carry, boolean carryDirty,
+                LongConsumer carryAcknowledgement) {
+            this.worldId = worldId;
+            this.storage = storage;
+            this.snapshots = List.copyOf(snapshots);
+            this.carry = carry;
+            this.carryDirty = carryDirty;
+            this.carryAcknowledgement = carryAcknowledgement;
+        }
+
+        public boolean isEmpty() { return snapshots.isEmpty() && !carryDirty; }
+
+        public void persist(boolean requireExact) {
+            FurnacePersistenceService.this.persist(worldId, snapshots, requireExact);
+            if (carryDirty) persistCarry(worldId, carry);
+        }
+
+        public void committed() {
+            if (carryDirty) carryAcknowledgement.accept(carry.revision());
+        }
+
+        public void restoreDirty() {
+            FurnacePersistenceService.restoreDirty(storage, snapshots);
         }
     }
 
@@ -377,7 +421,7 @@ public class FurnacePersistenceService {
         storage.restoreDirty(positions);
     }
 
-    private void persist(Long worldId, List<FurnaceSnapshot> snapshots) {
+    private void persist(Long worldId, List<FurnaceSnapshot> snapshots, boolean requireExact) {
         if (snapshots.isEmpty()) return;
         List<int[]> positions = new ArrayList<>(snapshots.size());
         for (FurnaceSnapshot snapshot : snapshots) {
@@ -400,6 +444,9 @@ public class FurnacePersistenceService {
                 entity = new WorldFurnace(worldId, snapshot.x, snapshot.y, snapshot.z);
             }
             if (entity.replaceIfNewer(snapshot.state)) changed.add(entity);
+            else if (requireExact && !entity.matchesExact(snapshot.state)) {
+                throw new StaleInventoryMutationException("stale joint furnace checkpoint");
+            }
         }
         if (!deleted.isEmpty()) repository.deleteAll(deleted);
         if (!changed.isEmpty()) repository.saveAll(changed);

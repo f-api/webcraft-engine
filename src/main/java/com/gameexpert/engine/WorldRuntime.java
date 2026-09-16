@@ -10013,15 +10013,24 @@ public final class WorldRuntime {
     }
 
     void flushDirtyChests() {
-        if (terminalPhase != TerminalPhase.RUNNING && terminalPhase != TerminalPhase.DISPOSED) return;
-        if (chestPersistence != null) {
-            chestPersistence.flushDirty(worldId, chestStorage, shulkerStorage);
-        }
+        flushContainerCheckpoint();
     }
 
     void flushDirtyFurnaces() {
+        flushContainerCheckpoint();
+    }
+
+    private void flushContainerCheckpoint() {
         if (terminalPhase != TerminalPhase.RUNNING && terminalPhase != TerminalPhase.DISPOSED) return;
-        if (furnacePersistence != null) {
+        if (chestPersistence != null) {
+            chestPersistence.flushDirty(worldId, chestStorage, shulkerStorage,
+                    furnacePersistence == null ? null : () -> {
+                        XpOrbSystem.FurnaceXpCarrySnapshot carry = xpOrbSystem.furnaceXpCarrySnapshot();
+                        return furnacePersistence.captureDirty(worldId, furnaceStorage,
+                                carry.amount(), carry.revision(), xpOrbSystem.furnaceXpCarryDirty(),
+                                xpOrbSystem::acknowledgeFurnaceXpCarryPersistence);
+                    });
+        } else if (furnacePersistence != null) {
             XpOrbSystem.FurnaceXpCarrySnapshot carry = xpOrbSystem.furnaceXpCarrySnapshot();
             furnacePersistence.flushDirty(worldId, furnaceStorage,
                     carry.amount(), carry.revision(), xpOrbSystem.furnaceXpCarryDirty(),
@@ -13437,7 +13446,7 @@ public final class WorldRuntime {
             }
             // Merchant payments are player transients and must join the departing inventory
             // before its final persistence snapshot is taken.
-            tickLoop.villagerTrades().foldPayments(nickname, removed.inventory());
+            tickLoop.returnVillagerPayments(removed);
         }
         playerDemandCursors.remove(nickname);
         mobSystem.clearPlayerUseState(nickname);

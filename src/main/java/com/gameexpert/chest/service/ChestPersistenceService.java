@@ -4,6 +4,8 @@ import com.gameexpert.chest.entity.ChestItem;
 import com.gameexpert.chest.entity.WorldChest;
 import com.gameexpert.chest.repository.WorldChestRepository;
 import com.gameexpert.engine.ChestInventory;
+import com.gameexpert.furnace.service.FurnacePersistenceService.DirtyCheckpoint;
+import java.util.function.Supplier;
 import com.gameexpert.engine.ChestStorage;
 import com.gameexpert.engine.PersistenceExecutor;
 import com.gameexpert.engine.ShulkerContentsStorage;
@@ -433,10 +435,16 @@ public class ChestPersistenceService {
      */
     public void flushDirty(
             Long worldId, ChestStorage storage, ShulkerContentsStorage shulkerStorage) {
+        flushDirty(worldId, storage, shulkerStorage, null);
+    }
+
+    /** A hopper move and both durable endpoints must share one captured checkpoint. */
+    public void flushDirty(Long worldId, ChestStorage storage,
+            ShulkerContentsStorage shulkerStorage, Supplier<DirtyCheckpoint> furnaceCapture) {
         requireWorldId(worldId);
         if (!pendingDirtyCheckpoints.add(worldId)) return;
         try {
-            flushOwnedDirtyCheckpoint(worldId, storage, shulkerStorage);
+            flushOwnedDirtyCheckpoint(worldId, storage, shulkerStorage, furnaceCapture);
         } catch (RuntimeException | Error failure) {
             pendingDirtyCheckpoints.remove(worldId);
             throw failure;
@@ -444,13 +452,18 @@ public class ChestPersistenceService {
     }
 
     private void flushOwnedDirtyCheckpoint(
-            Long worldId, ChestStorage storage, ShulkerContentsStorage shulkerStorage) {
+            Long worldId, ChestStorage storage, ShulkerContentsStorage shulkerStorage,
+            Supplier<DirtyCheckpoint> furnaceCapture) {
         ShulkerContentsStorage.Batch shulkerBatch = shulkerStorage == null
                 ? ShulkerContentsStorage.Batch.EMPTY : shulkerStorage.drainDirty();
         List<int[]> drained = storage.drainDirty();
+        DirtyCheckpoint furnace = null;
         try {
-            submitCapturedDirtyCheckpoint(worldId, storage, shulkerStorage, shulkerBatch, drained);
+            furnace = furnaceCapture == null ? null : furnaceCapture.get();
+            submitCapturedDirtyCheckpoint(worldId, storage, shulkerStorage, shulkerBatch,
+                    drained, furnace);
         } catch (RuntimeException | Error failure) {
+            if (furnace != null) furnace.restoreDirty();
             storage.restoreDirty(drained);
             if (shulkerStorage != null) shulkerStorage.restoreDirty(shulkerBatch);
             throw failure;
@@ -459,7 +472,7 @@ public class ChestPersistenceService {
 
     private void submitCapturedDirtyCheckpoint(Long worldId, ChestStorage storage,
             ShulkerContentsStorage shulkerStorage, ShulkerContentsStorage.Batch shulkerBatch,
-            List<int[]> drained) {
+            List<int[]> drained, DirtyCheckpoint furnace) {
         ShulkerContentsPersistenceService.Snapshot shulkerSnapshot =
                 shulkerPersistence == null || shulkerStorage == null
                         ? ShulkerContentsPersistenceService.Snapshot.EMPTY
@@ -470,6 +483,9 @@ public class ChestPersistenceService {
             ChestInventory.PersistenceSnapshot captured = chest == null
                     ? null : chest.persistenceSnapshot();
             if (captured != null && !WorldChest.isSupportedContainerSize(captured.slots())) {
+                if (furnace != null) {
+                    throw new IllegalStateException("unsupported chest in joint checkpoint");
+                }
                 // One unpersistable row must never roll back (and re-dirty) the whole batch every
                 // cycle: that would wedge every other container in this world's save queue.
                 log.error("월드 {} 상자 ({},{},{}) 칸 수 {} 는 저장할 수 없음 — 이 행만 제외",
@@ -484,7 +500,8 @@ public class ChestPersistenceService {
                     storage.hopperCooldownAt(pos[0], pos[1], pos[2]),
                     captured == null ? null : captured.potItemComponents()));
         }
-        if (snapshots.isEmpty() && shulkerSnapshot.isEmpty()) {
+        if (snapshots.isEmpty() && shulkerSnapshot.isEmpty()
+                && (furnace == null || furnace.isEmpty())) {
             pendingDirtyCheckpoints.remove(worldId);
             return;
         }
@@ -492,14 +509,17 @@ public class ChestPersistenceService {
             try {
                 List<BindingEffect> effects = new ArrayList<>();
                 transactionTemplate.executeWithoutResult(status -> {
-                    persist(worldId, snapshots, effects);
+                    persist(worldId, snapshots, effects, furnace != null);
+                    if (furnace != null) furnace.persist(true);
                     // [SHULKER-CONTENTS] 같은 트랜잭션 — 27칸의 소유가 두 lane 사이를 옮긴다.
                     if (shulkerPersistence != null) {
                         shulkerPersistence.persist(worldId, shulkerSnapshot);
                     }
                 });
                 for (BindingEffect effect : effects) applyBindingEffect(effect);
-            } catch (RuntimeException exception) {
+                if (furnace != null) furnace.committed();
+            } catch (RuntimeException | Error exception) {
+                if (furnace != null) furnace.restoreDirty();
                 restoreDirty(storage, snapshots);
                 if (shulkerStorage != null) shulkerStorage.restoreDirty(shulkerBatch);
                 log.warn("월드 {} 상자 {}개 flush 실패 — dirty 좌표 복원", worldId, snapshots.size(), exception);
@@ -509,6 +529,7 @@ public class ChestPersistenceService {
         });
         if (!accepted) {
             pendingDirtyCheckpoints.remove(worldId);
+            if (furnace != null) furnace.restoreDirty();
             restoreDirty(storage, snapshots);
             if (shulkerStorage != null) shulkerStorage.restoreDirty(shulkerBatch);
             log.warn("월드 {} 상자 flush 제출 거부 — dirty 좌표 {} 개 복원",
@@ -525,7 +546,7 @@ public class ChestPersistenceService {
     }
 
     private void persist(Long worldId, List<ChestSnapshot> snapshots,
-            List<BindingEffect> effects) {
+            List<BindingEffect> effects, boolean requireExact) {
         requireWorldId(worldId);
         List<int[]> positions = new ArrayList<>(snapshots.size());
         for (ChestSnapshot snapshot : snapshots) {
@@ -559,6 +580,8 @@ public class ChestPersistenceService {
                         || entity.getPersistenceRevision() != snapshot.binding.revision()) {
                     // The row was deleted/recreated or advanced after this resident snapshot.
                     // A stale task must never target the replacement row at this coordinate.
+                    if (requireExact) throw new StaleInventoryMutationException(
+                            "stale joint chest checkpoint binding");
                     continue;
                 }
             } else {
@@ -566,6 +589,8 @@ public class ChestPersistenceService {
                 if (entity != null) {
                     // An unbound cache cannot prove which incarnation it observed. Preserve the
                     // durable row, including canonical metadata, until a fresh load binds it.
+                    if (requireExact) throw new StaleInventoryMutationException(
+                            "unbound joint chest checkpoint");
                     continue;
                 }
             }
@@ -599,6 +624,10 @@ public class ChestPersistenceService {
                 entity.setPotItemComponents(snapshot.potItemComponents);
                 changed.add(entity);
                 pendingSaves.add(new PendingSave(position, entity));
+            } else if (requireExact && (entity.getPersistenceRevision() != snapshot.revision
+                    || !WorldChest.sameCanonicalItems(snapshot.containerSize,
+                            entity.getItems(), snapshot.items))) {
+                throw new StaleInventoryMutationException("stale joint chest checkpoint contents");
             }
         }
         if (!deleted.isEmpty()) repository.deleteAll(deleted);

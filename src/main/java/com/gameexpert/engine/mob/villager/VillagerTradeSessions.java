@@ -139,10 +139,13 @@ public final class VillagerTradeSessions {
         payments.remove(nickname);
     }
 
-    /** 주민이 사라지면 그 주민을 보던 세션을 모두 닫는다. 상태 자체는 영속 대상이라 남긴다. */
+    /** 주민이 사라지면 빈 세션을 닫고, 결제금이 남은 세션은 자동 반환까지 유지한다. */
     public void closeAllFor(long mobId) {
         openSessions.entrySet().removeIf(entry -> {
             if (entry.getValue() != mobId) return false;
+            ChestInventory held = payments.get(entry.getKey());
+            // Keep a funded session reachable until the owner's automatic close returns it.
+            if (held != null && (held.count(0) > 0 || held.count(1) > 0)) return false;
             selectedOffers.remove(entry.getKey());
             payments.remove(entry.getKey());
             return true;
@@ -171,7 +174,7 @@ public final class VillagerTradeSessions {
     public boolean selectAndFill(String nickname, long mobId, int offerIndex,
             PlayerInventory inventory) {
         if (!select(nickname, mobId, offerIndex)) return false;
-        foldPayments(nickname, inventory);
+        if (!foldPayments(nickname, inventory)) return false;
         VillagerTradeState state = states.get(mobId);
         VillagerTradeState.Slot slot = state.slots().get(offerIndex);
         int reputation = reputations.reputationOf(mobId, nickname);
@@ -186,18 +189,36 @@ public final class VillagerTradeSessions {
         return true;
     }
 
-    public void foldPayments(String nickname, PlayerInventory inventory) {
+    public boolean foldPayments(String nickname, PlayerInventory inventory) {
         ChestInventory held = payments.get(nickname);
-        if (held == null) return;
+        if (held == null) return true;
+        boolean complete = true;
         for (int slot = 0; slot < 2; slot++) {
             if (held.itemType(slot) == 0 || held.count(slot) <= 0) continue;
             int count = held.count(slot);
             int inserted = inventory.addItem(held.itemType(slot), count, held.durability(slot),
                     held.enchantments(slot), held.mapId(slot), held.shulkerId(slot),
                     held.bucketMobData(slot), held.itemComponentData(slot));
-            if (inserted != count) throw new IllegalStateException("villager payment fold must be lossless");
-            held.take(slot, count);
+            held.take(slot, inserted);
+            if (inserted != count) complete = false;
         }
+        return complete;
+    }
+
+    /** Closing returns what fits and exposes the remaining exact stacks for a ground drop. */
+    public List<PlayerInventory.DroppedStack> returnPayments(String nickname, PlayerInventory inventory) {
+        foldPayments(nickname, inventory);
+        ChestInventory held = payments.get(nickname);
+        if (held == null) return List.of();
+        List<PlayerInventory.DroppedStack> overflow = new ArrayList<>();
+        for (int slot = 0; slot < 2; slot++) {
+            if (held.count(slot) <= 0) continue;
+            overflow.add(PlayerInventory.DroppedStack.exact(held.itemType(slot), held.count(slot),
+                    held.durability(slot), held.enchantments(slot), held.mapId(slot),
+                    held.shulkerId(slot), held.bucketMobData(slot), held.itemComponentData(slot)));
+            held.take(slot, held.count(slot));
+        }
+        return List.copyOf(overflow);
     }
 
     private static void takeMatching(PlayerInventory inventory, ContainerAccess held, int paymentSlot,

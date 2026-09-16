@@ -7293,8 +7293,8 @@ public final class WorldTickLoop {
     private void applyVillagerTradeSelect(PlayerAction.VillagerTradeSelect action) {
         PlayerTickState player = rt.players().get(action.nickname());
         if (player == null || player.isDead()) return;
-        if (!villagerTrades.selectAndFill(action.nickname(), action.mobId(), action.offer(),
-                player.inventory())) return;
+        villagerTrades.selectAndFill(action.nickname(), action.mobId(), action.offer(),
+                player.inventory());
         sendTo(player, inventoryMessage(player));
         var view = villagerTrades.viewFor(action.nickname(), action.mobId());
         if (view != null) sendTo(player, villagerTradeUpdate(player, view));
@@ -7308,7 +7308,7 @@ public final class WorldTickLoop {
         if (mob != null && (mob.type == MobType.VILLAGER || mob.type == MobType.WANDERING_TRADER) && CombatRules.withinAuthorityReach(
                 player.x(), player.y(), player.z(), player.crouching(),
                 mob.x, mob.y, mob.z, mob.width(), mob.height())) return true;
-        villagerTrades.foldPayments(player.nickname(), player.inventory());
+        returnVillagerPayments(player);
         dropCraftingOverflow(player, player.inventory().closeContainerCursor());
         villagerTrades.close(player.nickname());
         sendTo(player, inventoryMessage(player));
@@ -7419,7 +7419,7 @@ public final class WorldTickLoop {
         if (mob == null || (mob.type != MobType.VILLAGER && mob.type != MobType.WANDERING_TRADER) || !CombatRules.withinAuthorityReach(
                 player.x(), player.y(), player.z(), player.crouching(),
                 mob.x, mob.y, mob.z, mob.width(), mob.height())) {
-            villagerTrades.foldPayments(action.nickname(), player.inventory());
+            returnVillagerPayments(player);
             villagerTrades.close(action.nickname());
             sendTo(player, inventoryMessage(player));
             sendTo(player, new com.gameexpert.ws.dto.WsMessages.Error("VILLAGER_TRADE_REJECTED"));
@@ -7428,7 +7428,13 @@ public final class WorldTickLoop {
         int selected = action.offer() >= 0
                 ? action.offer() : villagerTrades.selectedOffer(action.nickname());
         if (selected < 0) return;
-        villagerTrades.foldPayments(action.nickname(), player.inventory());
+        if (!villagerTrades.foldPayments(action.nickname(), player.inventory())) {
+            sendTo(player, inventoryMessage(player));
+            com.gameexpert.engine.mob.villager.VillagerTradeSessions.TradeView view =
+                    villagerTrades.viewFor(action.nickname(), action.mobId());
+            if (view != null) sendTo(player, villagerTradeUpdate(player, view));
+            return;
+        }
         var result = villagerTrades.trade(action.nickname(), action.mobId(), selected,
                 player.inventory(),
                 com.gameexpert.engine.mob.villager.VillagerTradeRules.offerDraws(
@@ -7487,7 +7493,7 @@ public final class WorldTickLoop {
             if (mob != null && (mob.type == MobType.VILLAGER || mob.type == MobType.WANDERING_TRADER) && CombatRules.withinAuthorityReach(
                     player.x(), player.y(), player.z(), player.crouching(),
                     mob.x, mob.y, mob.z, mob.width(), mob.height())) continue;
-            villagerTrades.foldPayments(player.nickname(), player.inventory());
+            returnVillagerPayments(player);
             dropCraftingOverflow(player, player.inventory().closeContainerCursor());
             villagerTrades.close(player.nickname());
             sendTo(player, inventoryMessage(player));
@@ -7495,12 +7501,16 @@ public final class WorldTickLoop {
         }
     }
 
+    void returnVillagerPayments(PlayerTickState player) {
+        dropCraftingOverflow(player, villagerTrades.returnPayments(player.nickname(), player.inventory()));
+    }
+
     private void applyCloseVillagerTrade(PlayerAction.CloseVillagerTrade action) {
         PlayerTickState player = rt.players().get(action.nickname());
         if (player == null) return;
         Long openMobId = villagerTrades.openMobId(action.nickname());
         if (openMobId != null && openMobId == action.mobId()) {
-            villagerTrades.foldPayments(action.nickname(), player.inventory());
+            returnVillagerPayments(player);
             dropCraftingOverflow(player, player.inventory().closeContainerCursor());
             villagerTrades.close(action.nickname());
             sendTo(player, inventoryMessage(player));
@@ -7684,7 +7694,7 @@ public final class WorldTickLoop {
         player.cancelPendingCraftingOpen();
         Long villagerMobId = villagerTrades.openMobId(player.nickname());
         if (villagerMobId != null) {
-            villagerTrades.foldPayments(player.nickname(), player.inventory());
+            returnVillagerPayments(player);
             dropCraftingOverflow(player, player.inventory().closeContainerCursor());
             villagerTrades.close(player.nickname());
             sendTo(player, inventoryMessage(player));
