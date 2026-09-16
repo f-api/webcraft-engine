@@ -15,7 +15,7 @@ class GeneratedDeclarationPublicationTest {
     private final CanonicalWorldgenChunkRepository chunks = mock(CanonicalWorldgenChunkRepository.class);
     private final WorldStore worlds = mock(WorldStore.class);
     private final CanonicalWorldgenPersistenceService store =
-            new CanonicalWorldgenPersistenceService(chunks, worlds);
+            spy(new CanonicalWorldgenPersistenceService(chunks, worlds));
     private final CanonicalWorldgenStore.ChunkCommit declaration =
             mock(CanonicalWorldgenStore.ChunkCommit.class);
 
@@ -63,9 +63,10 @@ class GeneratedDeclarationPublicationTest {
         byte[] originalFingerprint = {42};
         when(winner.worldIdentity()).thenReturn(WorldGenerationProfiles.CURRENT.getBaselineId());
         when(winner.fingerprint()).thenReturn(originalFingerprint);
-        CanonicalWorldgenChunk row = mock(CanonicalWorldgenChunk.class);
-        when(row.toCommit()).thenReturn(winner);
-        when(chunks.findByWorldIdAndChunkXAndChunkZ(7L, 0, 0)).thenReturn(Optional.of(row));
+        // Publication consumes a validated snapshot; carrier decoding has separate coverage.
+        CanonicalWorldgenStore.CanonicalChunkSnapshot snapshot =
+                new CanonicalWorldgenStore.CanonicalChunkSnapshot(winner, 0, 0, 0);
+        doReturn(snapshot).when(store).find(7L, 0, 0);
         CanonicalWorldgenStore.CanonicalChunkSnapshot result = store.commitGeneratedDeclaration(declaration);
         assertSame(winner, result.commit());
         assertArrayEquals(originalFingerprint, result.commit().fingerprint());
@@ -79,9 +80,10 @@ class GeneratedDeclarationPublicationTest {
         prepareWorld();
         CanonicalWorldgenStore.ChunkCommit winner = mock(CanonicalWorldgenStore.ChunkCommit.class);
         when(winner.worldIdentity()).thenReturn("foreign-profile");
-        CanonicalWorldgenChunk row = mock(CanonicalWorldgenChunk.class);
-        when(row.toCommit()).thenReturn(winner);
-        when(chunks.findByWorldIdAndChunkXAndChunkZ(7L, 0, 0)).thenReturn(Optional.of(row));
+        // Publication consumes a validated snapshot; carrier decoding has separate coverage.
+        CanonicalWorldgenStore.CanonicalChunkSnapshot snapshot =
+                new CanonicalWorldgenStore.CanonicalChunkSnapshot(winner, 0, 0, 0);
+        doReturn(snapshot).when(store).find(7L, 0, 0);
         assertThrows(IllegalStateException.class, () -> store.commitGeneratedDeclaration(declaration));
     }
 

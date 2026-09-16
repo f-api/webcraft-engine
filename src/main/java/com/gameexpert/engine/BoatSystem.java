@@ -528,12 +528,7 @@ final class BoatSystem {
     void flushForDisposal() {
         if (persistence == null) return;
         List<BoatSnapshot> snapshot = snapshotForPersistence();
-        if (rt.ctx().persistenceExecutor() == null) {
-            persistence.replaceWorld(rt.worldId(), snapshot);
-        } else {
-            rt.ctx().persistenceExecutor().submitFuture(
-                    () -> persistence.replaceWorld(rt.worldId(), snapshot));
-        }
+        rt.submitDisposalPersistence(() -> persistence.replaceWorld(rt.worldId(), snapshot));
     }
 
     /**

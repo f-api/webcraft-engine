@@ -66,6 +66,8 @@ public class ChestPersistenceService {
     private final TransactionTemplate transactionTemplate;
     /** Binds a resident snapshot to one database row incarnation and its last known revision. */
     private final Map<ChestPosition, RowBinding> rowBindings = new ConcurrentHashMap<>();
+    /** A later dirty capture must observe the preceding checkpoint's committed row binding. */
+    private final Set<Long> pendingDirtyCheckpoints = ConcurrentHashMap.newKeySet();
     /**
      * [SHULKER-CONTENTS] 27칸 참조 lane. {@code null} 이면 참조 저장소 없이 도는 배선이다
      * (좌표 상자만 쓰는 단위 테스트). 생성자를 늘리지 않고 선택 주입하는 이유는, 이 lane 이
@@ -431,14 +433,39 @@ public class ChestPersistenceService {
      */
     public void flushDirty(
             Long worldId, ChestStorage storage, ShulkerContentsStorage shulkerStorage) {
+        requireWorldId(worldId);
+        if (!pendingDirtyCheckpoints.add(worldId)) return;
+        try {
+            flushOwnedDirtyCheckpoint(worldId, storage, shulkerStorage);
+        } catch (RuntimeException | Error failure) {
+            pendingDirtyCheckpoints.remove(worldId);
+            throw failure;
+        }
+    }
+
+    private void flushOwnedDirtyCheckpoint(
+            Long worldId, ChestStorage storage, ShulkerContentsStorage shulkerStorage) {
         ShulkerContentsStorage.Batch shulkerBatch = shulkerStorage == null
                 ? ShulkerContentsStorage.Batch.EMPTY : shulkerStorage.drainDirty();
+        List<int[]> drained = storage.drainDirty();
+        try {
+            submitCapturedDirtyCheckpoint(worldId, storage, shulkerStorage, shulkerBatch, drained);
+        } catch (RuntimeException | Error failure) {
+            storage.restoreDirty(drained);
+            if (shulkerStorage != null) shulkerStorage.restoreDirty(shulkerBatch);
+            throw failure;
+        }
+    }
+
+    private void submitCapturedDirtyCheckpoint(Long worldId, ChestStorage storage,
+            ShulkerContentsStorage shulkerStorage, ShulkerContentsStorage.Batch shulkerBatch,
+            List<int[]> drained) {
         ShulkerContentsPersistenceService.Snapshot shulkerSnapshot =
                 shulkerPersistence == null || shulkerStorage == null
                         ? ShulkerContentsPersistenceService.Snapshot.EMPTY
                         : shulkerPersistence.snapshot(shulkerBatch, shulkerStorage);
         List<ChestSnapshot> snapshots = new ArrayList<>();
-        for (int[] pos : storage.drainDirty()) {
+        for (int[] pos : drained) {
             ChestInventory chest = storage.peekAt(pos[0], pos[1], pos[2]);
             ChestInventory.PersistenceSnapshot captured = chest == null
                     ? null : chest.persistenceSnapshot();
@@ -457,7 +484,10 @@ public class ChestPersistenceService {
                     storage.hopperCooldownAt(pos[0], pos[1], pos[2]),
                     captured == null ? null : captured.potItemComponents()));
         }
-        if (snapshots.isEmpty() && shulkerSnapshot.isEmpty()) return;
+        if (snapshots.isEmpty() && shulkerSnapshot.isEmpty()) {
+            pendingDirtyCheckpoints.remove(worldId);
+            return;
+        }
         boolean accepted = persistenceExecutor.trySubmit(() -> {
             try {
                 List<BindingEffect> effects = new ArrayList<>();
@@ -473,9 +503,12 @@ public class ChestPersistenceService {
                 restoreDirty(storage, snapshots);
                 if (shulkerStorage != null) shulkerStorage.restoreDirty(shulkerBatch);
                 log.warn("월드 {} 상자 {}개 flush 실패 — dirty 좌표 복원", worldId, snapshots.size(), exception);
+            } finally {
+                pendingDirtyCheckpoints.remove(worldId);
             }
         });
         if (!accepted) {
+            pendingDirtyCheckpoints.remove(worldId);
             restoreDirty(storage, snapshots);
             if (shulkerStorage != null) shulkerStorage.restoreDirty(shulkerBatch);
             log.warn("월드 {} 상자 flush 제출 거부 — dirty 좌표 {} 개 복원",

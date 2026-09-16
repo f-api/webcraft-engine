@@ -304,12 +304,7 @@ final class CushionSystem {
     void flushForDisposal() {
         if (persistence == null) return;
         List<CushionSnapshot> snapshot = cushions.stream().map(Cushion::snapshot).toList();
-        if (rt.ctx().persistenceExecutor() == null) {
-            persistence.replaceWorld(rt.worldId(), snapshot);
-        } else {
-            rt.ctx().persistenceExecutor().submitFuture(
-                    () -> persistence.replaceWorld(rt.worldId(), snapshot));
-        }
+        rt.submitDisposalPersistence(() -> persistence.replaceWorld(rt.worldId(), snapshot));
     }
 
     private void publishSnapshot() {

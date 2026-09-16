@@ -12067,7 +12067,7 @@ public final class WorldRuntime {
             } catch (RuntimeException failed) {
                 log.warn("world {} crafter mask flush failed ({} cells)", worldId, batch.size(),
                         failed);
-                enqueuePersistenceCompletion(requeue);
+                enqueuePersistenceCompletion(requeue, requeue);
             }
         };
         PersistenceExecutor writer = ctx.persistenceExecutor();
@@ -17917,6 +17917,7 @@ public final class WorldRuntime {
 
     private void beginDisposalPersistenceAttempt() {
         markOwnerThread();
+        disposalPersistenceFailed = false;
         PersistenceExecutor persistence = ctx.persistenceExecutor();
         // Resume only an already-started command; cold/future durable rows belong to restart.
         runtimeFallingSpeleothems.retryBeforePrelude();
@@ -17969,7 +17970,6 @@ public final class WorldRuntime {
             finishDisposal();
             return;
         }
-        disposalPersistenceFailed = false;
         retryPendingBannerPersistence(true);
         retryPendingSignPersistence(true);
         if (!tickLoop.flushEyeblossomSchedulesForDisposal()) {
@@ -18043,6 +18043,23 @@ public final class WorldRuntime {
                         traderWindow[0], (int) traderWindow[1]));
     }
 
+    /** Final sidecar writes report failures through bookkeeping admitted after the live fence. */
+    void submitDisposalPersistence(Runnable write) {
+        PersistenceExecutor writer = ctx.persistenceExecutor();
+        if (writer == null) {
+            write.run();
+            return;
+        }
+        writer.submitFuture(() -> {
+            try {
+                write.run();
+            } catch (RuntimeException | Error failure) {
+                Runnable failed = () -> markDisposalPersistenceFailed(failure);
+                enqueuePersistenceCompletion(failed, failed);
+            }
+        });
+    }
+
     private void completeDisposalPersistenceAttempt() {
         if (ownerQueueRequired()) {
             if (!enqueueOwnerTask(this::completeDisposalPersistenceAttempt)) {
@@ -18068,6 +18085,8 @@ public final class WorldRuntime {
         if (disposalPersistenceFailed || blockPending || journalPending || chestStorage.hasDirty()
                 || shulkerStorage.hasDirty()
                 || furnaceStorage.hasDirty()
+                || brewingStorage.hasDirty()
+                || !dirtyCrafterMasks.isEmpty()
                 || xpOrbSystem.furnaceXpCarryDirty()
                 || campfireStorage.hasDirty()
                 || enchantingPersistence != null && enchantingStorage.hasDirty()

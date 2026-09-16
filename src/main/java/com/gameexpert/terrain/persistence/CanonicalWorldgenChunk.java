@@ -43,6 +43,32 @@ public class CanonicalWorldgenChunk {
 
     protected CanonicalWorldgenChunk() {}
 
+    /** Unmanaged view reuses the same ABI, group and carrier validation as entity reads. */
+    static CanonicalWorldgenChunk fromSnapshotRow(CanonicalWorldgenChunkRepository.SnapshotRow source) {
+        CanonicalWorldgenChunk row = new CanonicalWorldgenChunk();
+        row.worldId = source.getWorldId();
+        row.worldIdentity = source.getWorldIdentity();
+        row.chunkX = source.getChunkX();
+        row.chunkZ = source.getChunkZ();
+        row.abiVersion = source.getAbiVersion();
+        row.carrierSchema = source.getCarrierSchema();
+        row.finalCarrier = source.getFinalCarrier();
+        row.structureCarrier = source.getStructureCarrier();
+        row.mutablePieceSuccessor = source.getMutablePieceSuccessor();
+        row.commitFingerprint = source.getCommitFingerprint();
+        row.groupFingerprint = source.getGroupFingerprint();
+        row.groupMinChunkX = source.getGroupMinChunkX();
+        row.groupMinChunkZ = source.getGroupMinChunkZ();
+        row.groupMaxChunkX = source.getGroupMaxChunkX();
+        row.groupMaxChunkZ = source.getGroupMaxChunkZ();
+        row.groupOrdinal = source.getGroupOrdinal();
+        row.groupSize = source.getGroupSize();
+        row.laneClaimMask = source.getLaneClaimMask();
+        row.laneAckMask = source.getLaneAckMask();
+        row.laneRejectedMask = source.getLaneRejectedMask();
+        return row;
+    }
+
     public CanonicalWorldgenChunk(CanonicalWorldgenStore.ChunkCommit commit) {
         initialize(commit);
     }

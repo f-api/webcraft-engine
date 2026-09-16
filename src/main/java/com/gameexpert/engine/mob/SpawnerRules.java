@@ -32,6 +32,12 @@ public final class SpawnerRules {
         };
     }
 
+    /** Exact canonical spawner blocks use one ID; retained visual variants remain valid. */
+    public static boolean matchesCarrier(String entityKey, int blockId) {
+        int expected = carrierForEntityKey(entityKey);
+        return expected != 0 && (blockId == Blocks.SPAWNER_BASE || blockId == expected);
+    }
+
     /** Converts the three visual carrier IDs into the authoritative state used at runtime. */
     public static int stateForCarrier(int blockId) {
         return switch (blockId) {

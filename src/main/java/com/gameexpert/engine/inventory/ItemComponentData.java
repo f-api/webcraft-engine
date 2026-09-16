@@ -46,6 +46,7 @@ public final class ItemComponentData {
     /** [UTILITY] 바닐라 {@code minecraft:trim}(무늬 + 재료). 장식 가능한 방어구에만 붙는다. 없으면 null. */
     private final ArmorTrim trim;
     private final List<PotDecoration> potDecorations;
+    private final String instrument;
 
     /** Four face ingredients in back, left, right, front order; ingredients cannot nest pots. */
     @lombok.Getter
@@ -84,7 +85,7 @@ public final class ItemComponentData {
     public ItemComponentData withPotDecorations(List<PotDecoration> value) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, trim, value);
+                enchantmentWord1, enchantmentWord2, potionContents, trim, value, instrument);
     }
 
     public ItemComponentData(String customName, List<BannerLayer> bannerPatterns,
@@ -144,6 +145,25 @@ public final class ItemComponentData {
             String suspiciousStewEffect, Integer suspiciousStewDurationMcTicks,
             Integer ominousBottleAmplifier, long enchantmentWord1, long enchantmentWord2,
             String potionContents, ArmorTrim trim, List<PotDecoration> potDecorations) {
+        this(customName, bannerPatterns, book, anvilUseCount, leatherColor, suspiciousStewEffect,
+                suspiciousStewDurationMcTicks, ominousBottleAmplifier, enchantmentWord1,
+                enchantmentWord2, potionContents, trim, potDecorations, null);
+    }
+
+    public ItemComponentData(String customName, List<BannerLayer> bannerPatterns,
+            BookData book, int anvilUseCount, Integer leatherColor,
+            String suspiciousStewEffect, Integer suspiciousStewDurationMcTicks,
+            Integer ominousBottleAmplifier, long enchantmentWord1, long enchantmentWord2,
+            String potionContents, ArmorTrim trim, List<PotDecoration> potDecorations,
+            String instrument) {
+        if (instrument != null && !java.util.Set.of(
+                "minecraft:ponder_goat_horn", "minecraft:sing_goat_horn",
+                "minecraft:seek_goat_horn", "minecraft:feel_goat_horn",
+                "minecraft:admire_goat_horn", "minecraft:call_goat_horn",
+                "minecraft:yearn_goat_horn", "minecraft:dream_goat_horn").contains(instrument)) {
+            throw new IllegalArgumentException("invalid goat horn instrument");
+        }
+        this.instrument = instrument;
         if (potDecorations == null || !potDecorations.isEmpty() && potDecorations.size() != 4)
             throw new IllegalArgumentException("pot decorations require exactly four faces");
         this.potDecorations = List.copyOf(potDecorations);
@@ -231,50 +251,50 @@ public final class ItemComponentData {
     public ItemComponentData withEnchantments(WideEnchantments value) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                value.word1(), value.word2(), potionContents, trim, potDecorations);
+                value.word1(), value.word2(), potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withCustomName(String value) {
         return new ItemComponentData(value, bannerPatterns, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations);
+                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withBannerPatterns(List<BannerLayer> value) {
         return new ItemComponentData(customName, value, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations);
+                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withBook(BookData value) {
         return new ItemComponentData(customName, bannerPatterns, value, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations);
+                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData afterAnvilUse() {
         return new ItemComponentData(customName, bannerPatterns, book,
                 Math.min(30, anvilUseCount + 1), leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations);
+                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withLeatherColor(Integer value) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, value,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations);
+                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withSuspiciousStewEffect(String effect, Integer durationMcTicks) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
                 effect, durationMcTicks, ominousBottleAmplifier, enchantmentWord1, enchantmentWord2,
-                potionContents, trim, potDecorations);
+                potionContents, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withOminousBottleAmplifier(int amplifier) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, amplifier, enchantmentWord1,
-                enchantmentWord2, potionContents, trim, potDecorations);
+                enchantmentWord2, potionContents, trim, potDecorations, instrument);
     }
 
     /** [UTILITY] 물약 내용물 키 또는 null. */
@@ -285,13 +305,21 @@ public final class ItemComponentData {
     public ItemComponentData withPotionContents(String value) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, value, trim, potDecorations);
+                enchantmentWord1, enchantmentWord2, value, trim, potDecorations, instrument);
     }
 
     public ItemComponentData withTrim(ArmorTrim value) {
         return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
                 suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
-                enchantmentWord1, enchantmentWord2, potionContents, value, potDecorations);
+                enchantmentWord1, enchantmentWord2, potionContents, value, potDecorations, instrument);
+    }
+
+    public String instrument() { return instrument; }
+
+    public ItemComponentData withInstrument(String value) {
+        return new ItemComponentData(customName, bannerPatterns, book, anvilUseCount, leatherColor,
+                suspiciousStewEffect, suspiciousStewDurationMcTicks, ominousBottleAmplifier,
+                enchantmentWord1, enchantmentWord2, potionContents, trim, potDecorations, value);
     }
 
     public int priorWorkPenalty() {

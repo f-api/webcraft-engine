@@ -3460,7 +3460,8 @@ public final class PlayerInventory {
                 // [CONTAINER-MENUS] 갑옷 거치대의 바닐라 max_stack_size 도 16 이다.
                 || type == ARMOR_STAND
                 || type == (short) Blocks.SPRUCE_HANGING_SIGN
-                || type == (short) Blocks.OAK_HANGING_SIGN) {
+                || type == (short) Blocks.OAK_HANGING_SIGN
+                || type == (short) Blocks.BAMBOO_HANGING_SIGN) {
             return EGG_STACK_MAX;
         }
         return STACK_MAX;

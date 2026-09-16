@@ -44,6 +44,7 @@ public final class ItemComponentCodec {
     /** [UTILITY] 물약 내용물·갑옷 장식을 싣는 14칸 스키마. 두 성분이 없으면 쓰지 않는다. */
     private static final String PREFIX_V5 = "WCIC5";
     private static final String PREFIX_V6 = "WCIC6";
+    private static final String PREFIX_V7 = "WCIC7";
     private static final String NULL = "~";
     private ItemComponentCodec() {}
 
@@ -56,7 +57,7 @@ public final class ItemComponentCodec {
                         && data.suspiciousStewDurationMcTicks() == null
                         && data.ominousBottleAmplifierComponent() == null
                         && !data.hasExtendedEnchantments()
-                        && data.potionContents() == null && data.trim() == null && data.potDecorations().isEmpty()) return null;
+                        && data.potionContents() == null && data.trim() == null && data.potDecorations().isEmpty() && data.instrument() == null) return null;
         validateForItem(itemType, data);
         StringBuilder patterns = new StringBuilder();
         for (ItemComponentData.BannerLayer layer : data.bannerPatterns()) {
@@ -77,9 +78,10 @@ public final class ItemComponentCodec {
         }
         Integer amplifier = data.ominousBottleAmplifierComponent();
         boolean extended = data.hasExtendedEnchantments();
+        boolean v7 = data.instrument() != null;
         boolean v6 = !data.potDecorations().isEmpty();
-        boolean v5 = v6 || data.potionContents() != null || data.trim() != null;
-        String prefix = v6 ? PREFIX_V6 : v5 ? PREFIX_V5 : extended ? PREFIX_V4 : amplifier == null ? PREFIX : PREFIX_V3;
+        boolean v5 = v7 || v6 || data.potionContents() != null || data.trim() != null;
+        String prefix = v7 ? PREFIX_V7 : v6 ? PREFIX_V6 : v5 ? PREFIX_V5 : extended ? PREFIX_V4 : amplifier == null ? PREFIX : PREFIX_V3;
         return prefix + '|'
                 + data.anvilUseCount() + '|'
                 + encodeText(data.customName()) + '|'
@@ -98,7 +100,8 @@ public final class ItemComponentCodec {
                         ? "|" + (amplifier == null ? NULL : amplifier) + "|"
                                 + data.enchantments(0L).extendedHex()
                         : amplifier == null ? "" : "|" + amplifier)
-                + (v6 ? "|" + encodePotDecorations(data.potDecorations()) : "");
+                + (v6 || v7 ? "|" + (v6 ? encodePotDecorations(data.potDecorations()) : NULL) : "")
+                + (v7 ? "|" + data.instrument() : "");
     }
 
     /**
@@ -107,10 +110,11 @@ public final class ItemComponentCodec {
      */
     public static String extendedEnchantmentHex(String encoded) {
         if (encoded == null) return null;
-        if (encoded.startsWith(PREFIX_V5 + '|') || encoded.startsWith(PREFIX_V6 + '|')) {
+        if (encoded.startsWith(PREFIX_V5 + '|') || encoded.startsWith(PREFIX_V6 + '|')
+                || encoded.startsWith(PREFIX_V7 + '|')) {
             // [UTILITY] WCIC5 의 12번째 칸(인덱스 11)이 확장 인챈트 16진 또는 ~ 다.
             String[] fields = encoded.split("\\|", -1);
-            return (fields.length == 14 || fields.length == 15) && !NULL.equals(fields[11]) ? fields[11] : null;
+            return (fields.length == 14 || fields.length == 15 || fields.length == 16) && !NULL.equals(fields[11]) ? fields[11] : null;
         }
         if (!encoded.startsWith(PREFIX_V4 + '|')) return null;
         return encoded.substring(encoded.lastIndexOf('|') + 1);
@@ -146,9 +150,10 @@ public final class ItemComponentCodec {
         String[] fields = encoded.split("\\|", -1);
         boolean v3 = fields.length == 11 && PREFIX_V3.equals(fields[0]);
         boolean v4 = fields.length == 12 && PREFIX_V4.equals(fields[0]);
+        boolean v7 = fields.length == 16 && PREFIX_V7.equals(fields[0]);
         boolean v6 = fields.length == 15 && PREFIX_V6.equals(fields[0]);
-        if (v6 && encoded.length() > 4096) throw new IllegalArgumentException("pot components too large");
-        boolean v5 = v6 || fields.length == 14 && PREFIX_V5.equals(fields[0]);
+        if ((v6 || v7) && encoded.length() > 4096) throw new IllegalArgumentException("pot components too large");
+        boolean v5 = v7 || v6 || fields.length == 14 && PREFIX_V5.equals(fields[0]);
         if (!v3 && !v4 && !v5 && (fields.length != 10 || !PREFIX.equals(fields[0]))) {
             throw new IllegalArgumentException("invalid item component schema");
         }
@@ -175,7 +180,7 @@ public final class ItemComponentCodec {
                         fields[13].substring(0, colon), fields[13].substring(colon + 1));
             }
             // WCIC5 는 물약·장식 성분이 있을 때만 정규형이다.
-            if (!v6 && potionContents == null && trim == null) {
+            if (!v6 && !v7 && potionContents == null && trim == null) {
                 throw new IllegalArgumentException("invalid item component schema");
             }
         }
@@ -238,7 +243,9 @@ public final class ItemComponentCodec {
         ItemComponentData data = new ItemComponentData(
                 decodeText(fields[2]), patterns, book, anvilUse, leatherColor,
                 stewEffect, stewDuration, amplifier, extended.word1(), extended.word2(),
-                potionContents, trim, v6 ? decodePotDecorations(fields[14]) : List.of());
+                potionContents, trim, v6 || v7 && !NULL.equals(fields[14])
+                        ? decodePotDecorations(fields[14]) : List.of(),
+                v7 ? fields[15] : null);
         validateForItem(itemType, data);
         return data;
     }
@@ -262,6 +269,8 @@ public final class ItemComponentCodec {
     public static void validateForItem(short itemType, ItemComponentData data) {
         if (data == null) throw new IllegalArgumentException("components are required");
         int id = Short.toUnsignedInt(itemType);
+        if (data.instrument() != null && itemType != PlayerInventory.GOAT_HORN)
+            throw new IllegalArgumentException("instrument requires goat horn");
         if (!data.potDecorations().isEmpty() && !Blocks.isDecoratedPot(id))
             throw new IllegalArgumentException("pot decorations require decorated pot");
         if (!data.bannerPatterns().isEmpty()) {

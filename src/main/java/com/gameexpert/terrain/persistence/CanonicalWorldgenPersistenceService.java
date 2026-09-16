@@ -169,7 +169,8 @@ public class CanonicalWorldgenPersistenceService
 
     @Override @Transactional(readOnly = true)
     public CanonicalChunkSnapshot find(long worldId, int chunkX, int chunkZ) {
-        return chunks.findByWorldIdAndChunkXAndChunkZ(worldId, chunkX, chunkZ)
+        return chunks.findSnapshotRow(worldId, chunkX, chunkZ)
+                .map(CanonicalWorldgenChunk::fromSnapshotRow)
                 .map(CanonicalWorldgenPersistenceService::snapshot)
                 .orElse(null);
     }

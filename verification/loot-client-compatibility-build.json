@@ -1,0 +1,25 @@
+{
+  "htmlSource": "/private/tmp/webcraft-crouch-zbhepI/source/client/dist/index.html",
+  "htmlSha256": "e47edf291151239efb850ec2ffe1904342c03c446b1f076bf7a2095f7b618886",
+  "htmlBytes": 38682636,
+  "buildLog": "/private/tmp/client-issues78-build-final.log",
+  "buildExit": 0,
+  "tests": {
+    "files": 4,
+    "passed": 19,
+    "log": "/private/tmp/client-issues78-check-pinned.log"
+  },
+  "sourceManifestRechecked": true,
+  "node": "/opt/homebrew/Cellar/node/26.5.0/bin/node",
+  "soundNote": "Eight stable procedural sample/pitch combinations, not copied vanilla recordings. Existing goat_horn key retained.",
+  "replacedEngineHtmlSha256": "f23a8ef838119f0b3e83c2462682e4f9864c870077955771ef131ed555fd8b62",
+  "engineHtmlSha256": "e47edf291151239efb850ec2ffe1904342c03c446b1f076bf7a2095f7b618886",
+  "markers": {
+    "/@vite/client": false,
+    "sourceMappingURL=": false,
+    "__DEBUG__": false,
+    "vite/hmr": false,
+    "webcraft-audio-integrity": true
+  },
+  "mainAndWorkerObfuscationRecorded": true
+}

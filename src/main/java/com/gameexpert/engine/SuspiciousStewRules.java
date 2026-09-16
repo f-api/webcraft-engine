@@ -139,6 +139,8 @@ public final class SuspiciousStewRules {
         if (protocolName == null || durationMcTicks == null) {
             throw new IllegalArgumentException("complete suspicious stew effect is required");
         }
+        if (protocolName.equals("saturation") && durationMcTicks >= 7 && durationMcTicks <= 10)
+            return new StewEffect(StatusEffect.SATURATION, durationMcTicks);
         if (protocolName.equals("blindness") && durationMcTicks == 220) return new StewEffect(StatusEffect.BLINDNESS, 220);
         if (protocolName.equals("nausea") && durationMcTicks == 140) return new StewEffect(StatusEffect.NAUSEA, 140);
         for (EffectRange range : DESERT_WELL_EFFECTS) {

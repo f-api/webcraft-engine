@@ -58,7 +58,7 @@ final class SqlWriteFences {
             }
             Map<String, String> paths = new TreeMap<>();
             Set<String> student = Set.of("world", "worlds", "player", "players", "chat_message", "chat_messages",
-                    "world_trial_site", "world_trial_sites", "webcraft_world_authority");
+                    "webcraft_world_authority");
             for (Map.Entry<String, Set<String>> e : columns.entrySet()) {
                 if (student.contains(e.getKey())) continue;
                 if (e.getValue().contains("world_id")) paths.put(e.getKey(), "$row.world_id");

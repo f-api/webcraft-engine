@@ -986,7 +986,7 @@ public final class BuildingBlockRules {
                     Blocks.REDSTONE_WIRE, Blocks.REPEATER, Blocks.REDSTONE_TORCH,
                     Blocks.OAK_WALL_SIGN, Blocks.STONE_PRESSURE_PLATE,
                     Blocks.STONE_BUTTON, Blocks.END_PORTAL, Blocks.END_GATEWAY,
-                    Blocks.SPRUCE_HANGING_SIGN, Blocks.OAK_HANGING_SIGN,
+                    Blocks.SPRUCE_HANGING_SIGN, Blocks.OAK_HANGING_SIGN, Blocks.BAMBOO_HANGING_SIGN,
                     Blocks.WHITE_WALL_BANNER, Blocks.OAK_BUTTON, Blocks.OAK_PRESSURE_PLATE,
                     Blocks.BROWN_WALL_BANNER, Blocks.MELON_STEM, Blocks.MAGENTA_WALL_BANNER -> true;
             default -> false;

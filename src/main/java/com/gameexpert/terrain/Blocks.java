@@ -4505,7 +4505,8 @@ public final class Blocks {
     public static boolean isConcreteStairs(int id) { return id >= WHITE_CONCRETE_STAIRS && id <= BLACK_CONCRETE_STAIRS; }
     public static boolean isConcreteSlab(int id) { return id >= WHITE_CONCRETE_SLAB && id <= BLACK_CONCRETE_SLAB; }
     public static final int OPEN_EYEBLOSSOM = 2515;
-    public static final int BLOCK_ID_HIGH_WATER = 2515;
+    public static final int BAMBOO_HANGING_SIGN = 2516;
+    public static final int BLOCK_ID_HIGH_WATER = 2516;
     /**
      * 블록과 순수 아이템을 합친 공유 프로토콜 ID 상한. 441~444 낚시 예약 공백 뒤
      * wildlife interaction 아이템 446–451, 염료 452–467, 복어 양동이 468,
@@ -4618,7 +4619,7 @@ public final class Blocks {
     // EXPERIENCE_BOTTLE(2339), [MACE] 조율자 배정 2370 의 순수 아이템 MACE, [UTILITY] 월드 블록 2380~2382 ·
     // 순수 아이템 2383~2416 · 흑암석 계열 월드 블록 2417~2419 가 붙었고, [CONTAINER-MENUS] 갑옷 거치대
     // ARMOR_STAND(2430)와 광산 수레 2431~2435(TNT_MINECART), 벌레잡이풀 2429와 살점 블록 2436~2437이 등록된다.
-    public static final int PROTOCOL_ID_HIGH_WATER = 2515;
+    public static final int PROTOCOL_ID_HIGH_WATER = 2516;
     /** 블록과 순수 아이템이 공유하는 append-only 프로토콜 ID 표의 독립 용량입니다. */
     public static final int PROTOCOL_ID_TABLE_CAPACITY = 4096;
     /**
@@ -5303,6 +5304,7 @@ public final class Blocks {
         }
         classify(SPRUCE_HANGING_SIGN, SupportKind.NONE, SPRUCE_HANGING_SIGN);
         classify(OAK_HANGING_SIGN, SupportKind.NONE, OAK_HANGING_SIGN);
+        classify(BAMBOO_HANGING_SIGN, SupportKind.NONE, BAMBOO_HANGING_SIGN);
         classify(FLOWER_POT, SupportKind.SOLID_BELOW, FLOWER_POT);
         classifyPureItemRange(BURN_POTTERY_SHERD, MUSIC_DISC_RELIC); // 2248~2259
         classify(BARRIER, SupportKind.NONE, AIR);

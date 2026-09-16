@@ -51,11 +51,12 @@ public class ChestItem {
      */
     private Integer shulkerId;
 
-    @Column(length = 512)
+    @Column(columnDefinition = "LONGTEXT")
     private String bucketMobData;
 
     /** Current WCIC2 item components. Books can exceed VARCHAR limits. */
     @Lob
+    @Column(columnDefinition = "LONGTEXT")
     private String itemComponentData;
 
     public ChestItem(int slot, short itemType, int itemCount, Integer durability,
@@ -66,9 +67,6 @@ public class ChestItem {
         }
         if (PlayerInventory.isDurable(itemType) != (durability != null)) {
             throw new IllegalArgumentException("invalid chest item durability representation");
-        }
-        if (bucketMobData != null && bucketMobData.length() > 512) {
-            throw new IllegalArgumentException("bucket mob payload exceeds chest column bound");
         }
         try {
             new PlayerInventory.StackSnapshot(itemType, itemCount,

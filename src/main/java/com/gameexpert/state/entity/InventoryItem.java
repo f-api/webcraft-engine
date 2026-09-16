@@ -47,10 +47,11 @@ public class InventoryItem {
     private Integer shulkerId;
 
     /** Strict WCMB1 identity component for Axolotl, Tropical Fish and Tadpole buckets. */
+    @Column(columnDefinition = "LONGTEXT")
     private String bucketMobData;
 
     /** Strict current WCIC2 item component identity, including suspicious-stew effects. */
-    @Column(length = 8192)
+    @Column(columnDefinition = "LONGTEXT")
     private String itemComponentData;
 
     public InventoryItem(int slot, short itemType, int itemCount, Integer durability) {

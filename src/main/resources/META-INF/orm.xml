@@ -81,4 +81,12 @@
             <many-to-one name="world" target-entity="com.gameexpert.world.entity.World" fetch="LAZY" optional="false"/>
         </attributes>
     </entity>
+    <entity class="com.gameexpert.trial.entity.WorldTrialSite">
+        <attributes>
+            <basic name="ledgerPayload">
+                <column name="ledger_payload" column-definition="LONGTEXT"/>
+                <lob/>
+            </basic>
+        </attributes>
+    </entity>
 </entity-mappings>

@@ -35,6 +35,56 @@ public interface CanonicalWorldgenChunkRepository
         return findStructureCarrierRow(id).map(StructureCarrierRow::getStructureCarrier);
     }
 
+    /** Scalar projection does not retain carrier blobs as managed JPA entities during recovery. */
+    interface SnapshotRow {
+        long getWorldId();
+        String getWorldIdentity();
+        int getChunkX();
+        int getChunkZ();
+        int getAbiVersion();
+        int getCarrierSchema();
+        byte[] getFinalCarrier();
+        byte[] getStructureCarrier();
+        byte[] getMutablePieceSuccessor();
+        byte[] getCommitFingerprint();
+        byte[] getGroupFingerprint();
+        Integer getGroupMinChunkX();
+        Integer getGroupMinChunkZ();
+        Integer getGroupMaxChunkX();
+        Integer getGroupMaxChunkZ();
+        Integer getGroupOrdinal();
+        Integer getGroupSize();
+        int getLaneClaimMask();
+        int getLaneAckMask();
+        int getLaneRejectedMask();
+    }
+    @Query("""
+            select c.worldId as worldId,
+                   c.worldIdentity as worldIdentity,
+                   c.chunkX as chunkX,
+                   c.chunkZ as chunkZ,
+                   c.abiVersion as abiVersion,
+                   c.carrierSchema as carrierSchema,
+                   c.finalCarrier as finalCarrier,
+                   c.structureCarrier as structureCarrier,
+                   c.mutablePieceSuccessor as mutablePieceSuccessor,
+                   c.commitFingerprint as commitFingerprint,
+                   c.groupFingerprint as groupFingerprint,
+                   c.groupMinChunkX as groupMinChunkX,
+                   c.groupMinChunkZ as groupMinChunkZ,
+                   c.groupMaxChunkX as groupMaxChunkX,
+                   c.groupMaxChunkZ as groupMaxChunkZ,
+                   c.groupOrdinal as groupOrdinal,
+                   c.groupSize as groupSize,
+                   c.laneClaimMask as laneClaimMask,
+                   c.laneAckMask as laneAckMask,
+                   c.laneRejectedMask as laneRejectedMask
+            from CanonicalWorldgenChunk c
+            where c.worldId = :worldId and c.chunkX = :chunkX and c.chunkZ = :chunkZ
+            """)
+    Optional<SnapshotRow> findSnapshotRow(@Param("worldId") long worldId,
+            @Param("chunkX") int chunkX, @Param("chunkZ") int chunkZ);
+
     Optional<CanonicalWorldgenChunk> findByWorldIdAndChunkXAndChunkZ(long worldId, int chunkX,
             int chunkZ);
     /**

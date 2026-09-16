@@ -464,7 +464,7 @@ final class WorldMapColorSampler {
         assign(GREEN, Blocks.GREEN_CANDLE);
         assign(PURPLE, Blocks.PURPLE_CANDLE);
         assign(BROWN, Blocks.BROWN_CANDLE);
-        assign(YELLOW, Blocks.BAMBOO_FENCE);
+        assign(YELLOW, Blocks.BAMBOO_FENCE, Blocks.BAMBOO_HANGING_SIGN);
         // 양털 계단은 흰 양털과 같은 SNOW(8) 다.
         for (int color = 0; color < 16; color++) {
             assign(DYE_MAP_COLORS[color], Blocks.WOOL_STAIRS_BY_DYE_COLOR[color],

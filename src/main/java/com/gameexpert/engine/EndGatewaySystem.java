@@ -450,8 +450,6 @@ final class EndGatewaySystem {
         List<EndGatewayData> rows = List.copyOf(dirty.values());
         long worldId = rt.worldId();
         EndGatewayPersistenceService service = persistence;
-        if (rt.ctx().persistenceExecutor() == null) service.upsert(worldId, rows);
-        else rt.ctx().persistenceExecutor().submitFuture(() -> service.upsert(worldId, rows));
-        dirty.clear();
+        rt.submitDisposalPersistence(() -> service.upsert(worldId, rows));
     }
 }

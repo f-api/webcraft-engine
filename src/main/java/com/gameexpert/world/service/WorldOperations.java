@@ -1,7 +1,6 @@
 package com.gameexpert.world.service;
 
 import java.security.SecureRandom;
-import java.util.concurrent.locks.ReentrantLock;
 import java.util.regex.Pattern;
 
 import org.springframework.stereotype.Service;
@@ -147,7 +146,7 @@ public class WorldOperations {
 
 
     private final SecureRandom secureRandom = new SecureRandom();
-    private final ReentrantLock worldCreationLock = new ReentrantLock();
+    private final WorldCreationGuard worldCreationGuard;
     private static final Pattern EXPLICIT_SEED_OWNER_NICKNAME = Pattern.compile("[A-Za-z0-9_]{2,12}");
 
     public long worldOnlineCount(Long worldId) {
@@ -288,23 +287,10 @@ public class WorldOperations {
         return ExplicitWorldSeed.resolve(engineProperties, name, debugSeed, secureRandom::nextInt);
     }
 
+    @Transactional
     public <T> T duringCreation(Supplier<T> action) {
-        worldCreationLock.lock();
-        boolean releaseAfterTransaction = false;
-        try {
-            if (TransactionSynchronizationManager.isSynchronizationActive()) {
-                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                    @Override
-                    public void afterCompletion(int status) {
-                        worldCreationLock.unlock();
-                    }
-                });
-                releaseAfterTransaction = true;
-            }
-            return action.get();
-        } finally {
-            if (!releaseAfterTransaction) worldCreationLock.unlock();
-        }
+        worldCreationGuard.lock();
+        return action.get();
     }
 
     public boolean hasParticipants(Long worldId) {

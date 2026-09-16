@@ -1,0 +1,57 @@
+[
+  {
+    "path": "client/src/world/blocks.ts",
+    "baseSha256": "2fc4bb31a3e8ae33164c93687c8fb19a22e6d6b4c41de035cd7da94ba7ad18ba",
+    "candidateSha256": "a461e826fda30fadcad42d949b71f1ffa9d8cc6850f03a1816cc5adf8a4ca0c8"
+  },
+  {
+    "path": "client/src/world/BlockRegistry.ts",
+    "baseSha256": "872d06e58464d13dbff3b3faf095f1bd8ec196823ace6cd662d7a1a2b0c78549",
+    "candidateSha256": "925a842d77a207d98d15b7e322c5c0af6dc76821951d7b87824ab5d16ed8d9c4"
+  },
+  {
+    "path": "client/src/ui/items.ts",
+    "baseSha256": "65e0b78ad783dd9c165cc2817ac8fd1d321b0ffb7b0adb69e67f60ae0cbcb610",
+    "candidateSha256": "e3e3c8819ac1f8cb9c8b08e9909c5547536b1be1f8744333f66f4905249932f8"
+  },
+  {
+    "path": "client/src/ui/icons.ts",
+    "baseSha256": "04df44f3e101f8d9514d5bcac26fb380d6c2119377e786a8b72692e3e37e96d3",
+    "candidateSha256": "094e3ef9f9894e6a166b59c4167bac6be9c824c2e55533a1b9b66ecaf30c87ba"
+  },
+  {
+    "path": "client/src/audio/SemanticSoundRegistry.ts",
+    "baseSha256": "e818bcc2516e922fa7c2c0d2246938c0003f2d659028d9bec70a7950a33e592b",
+    "candidateSha256": "fd008a9613e6e015e93fb36e14cad73567622880ed663310f88af88890400f3c"
+  },
+  {
+    "path": "client/src/net/Protocol.ts",
+    "baseSha256": "c01eb0969caa7da9bb3a7ee86a39c03f47d9b63cb9c98e092ef7575227b598bd",
+    "candidateSha256": "2c4d6dcc2f37c93bf3a86e406bec61d0c215252bde5dc072e3c9aad46cf81df1"
+  },
+  {
+    "path": "client/src/game.ts",
+    "baseSha256": "7e724e7ea6e95e0edc7e65d25c5bd7cd8f0804a2432f0a2925bdc8208644c255",
+    "candidateSha256": "a204d617fea2c1d768b9774f73558eaf9f4b684f42ca245902918e2df902f6bd"
+  },
+  {
+    "path": "client/src/backend/standalone/StandaloneSuspiciousStew.ts",
+    "baseSha256": "48f81c8adfdeff447dd2808c4a08c4f32aa2d5b852fc2992214293c0c6fbc25e",
+    "candidateSha256": "94efedaa795ad4377e49f15fca3e07839c089d6bec01c0629a9b5b7bc5ce2f4d"
+  },
+  {
+    "path": "client/src/net/Protocol.sound.test.ts",
+    "baseSha256": "05e7e8956d9864adc0c7a0b4d7ccc64e81f8445a84b636e80052aec453eb7fac",
+    "candidateSha256": "5e85ed88f9ba4ac63054f4e1fc8abed5f0341f89cbb199a26038eaff9f65efc2"
+  },
+  {
+    "path": "client/src/ui/bambooHangingSignIcon.ts",
+    "baseSha256": null,
+    "candidateSha256": "fc14a96bd594a3671e67afdd0c06a35efd5e4d0124fab6912abb3f72b1dc76b7"
+  },
+  {
+    "path": "client/src/world/AssignmentLootClient.test.ts",
+    "baseSha256": null,
+    "candidateSha256": "06e26395f2d3e9dfceebcb100cbba90cf0fa8352f75b40cfeadb17b105512c0e"
+  }
+]

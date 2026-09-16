@@ -525,7 +525,7 @@ public final class ExplosionRules {
             case Blocks.WATER_CAULDRON -> 2.0; // ofLegacyCopy(cauldron) — 2.0
             case Blocks.STICKY_PISTON -> 1.5; // pistonProperties(): strength(1.5F)
             // 팻말·매달린 팟말·벽 군기는 전부 strength(1.0F) 다.
-            case Blocks.OAK_WALL_SIGN, Blocks.OAK_HANGING_SIGN, Blocks.SPRUCE_HANGING_SIGN,
+            case Blocks.OAK_WALL_SIGN, Blocks.OAK_HANGING_SIGN, Blocks.SPRUCE_HANGING_SIGN, Blocks.BAMBOO_HANGING_SIGN,
                     Blocks.WHITE_WALL_BANNER, Blocks.BROWN_WALL_BANNER, Blocks.MELON -> 1.0;
             // [WEBCRAFT] 흰 양털 계단은 바닐라 대응이 없는 원본 형상이라 양털의 0.8 을 쓴다.
             case Blocks.WHITE_WOOL_STAIRS -> 0.8;

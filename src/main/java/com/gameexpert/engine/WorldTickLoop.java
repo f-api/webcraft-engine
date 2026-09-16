@@ -13959,7 +13959,8 @@ public final class WorldTickLoop {
         PlayerTickState player = rt.players().get(trophy.nickname());
         if (player == null || player.isDead()) return;
         PlayerInventory.Hand hand = inventoryHand(trophy.hand());
-        short type = player.inventory().stack(hand).itemType();
+        PlayerInventory.StackSnapshot heldStack = player.inventory().stack(hand);
+        short type = heldStack.itemType();
         double eyeY = player.y() + PlayerInteractionRules.eyeHeight(player.crouching());
         if (type == PlayerInventory.BATTERING_HORN
                 || type == PlayerInventory.ILLAGER_MUSIC_BOX
@@ -13967,7 +13968,7 @@ public final class WorldTickLoop {
             if (!player.tryUseTrophyInstrument(tickNo)) return;
             broadcastWorldSoundExact(
                     type == PlayerInventory.BATTERING_HORN ? "battering_horn"
-                            : type == PlayerInventory.GOAT_HORN ? "goat_horn"
+                            : type == PlayerInventory.GOAT_HORN ? goatHornSound(heldStack)
                             : "illager_music_box",
                     player.x(), eyeY, player.z(), (short) 0);
             return;
@@ -13976,6 +13977,22 @@ public final class WorldTickLoop {
         if (!player.inventory().consumeOne(hand, PlayerInventory.PETAL_POUCH)) return;
         broadcastWorldSoundExact("petal_pouch", player.x(), eyeY, player.z(), (short) 0);
         sendTo(player, inventoryMessage(player));
+    }
+
+    static String goatHornSound(PlayerInventory.StackSnapshot heldStack) {
+        String instrument = heldStack.itemComponents().instrument();
+        if (instrument == null) return "goat_horn_ponder";
+        return switch (instrument) {
+            case "minecraft:ponder_goat_horn" -> "goat_horn_ponder";
+            case "minecraft:sing_goat_horn" -> "goat_horn_sing";
+            case "minecraft:seek_goat_horn" -> "goat_horn_seek";
+            case "minecraft:feel_goat_horn" -> "goat_horn_feel";
+            case "minecraft:admire_goat_horn" -> "goat_horn_admire";
+            case "minecraft:call_goat_horn" -> "goat_horn_call";
+            case "minecraft:yearn_goat_horn" -> "goat_horn_yearn";
+            case "minecraft:dream_goat_horn" -> "goat_horn_dream";
+            default -> throw new IllegalArgumentException("unsupported goat horn instrument");
+        };
     }
 
     /**

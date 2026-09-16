@@ -367,12 +367,8 @@ final class PlacedEntitySystem {
         if (persistence == null) return;
         List<PlacedEntitySnapshot> snapshot = snapshotForPersistence();
         List<MobPersistenceSnapshot> passengers = List.copyOf(passengerPersistence.values());
-        if (rt.ctx().persistenceExecutor() == null) {
-            persistence.replaceWorldWithPassengers(rt.worldId(), snapshot, passengers);
-        } else {
-            rt.ctx().persistenceExecutor().submitFuture(
-                    () -> persistence.replaceWorldWithPassengers(rt.worldId(), snapshot, passengers));
-        }
+        rt.submitDisposalPersistence(
+                () -> persistence.replaceWorldWithPassengers(rt.worldId(), snapshot, passengers));
     }
 
     // ── queries ──────────────────────────────────────────────────────────

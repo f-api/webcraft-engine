@@ -133,7 +133,7 @@ SET @enchanting_items_create = CONCAT(
     '`enchantments` BIGINT NULL,',
     '`map_id` INT NULL,',
     '`shulker_id` INT NULL,',
-    '`bucket_mob_data` VARCHAR(512) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,',
+    '`bucket_mob_data` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,',
     '`item_component_data` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,',
     'CONSTRAINT `uk_world_enchanting_table_item_slot` UNIQUE (`table_id`,`slot`),',
     'CONSTRAINT `fk_world_enchanting_item_table` FOREIGN KEY (`table_id`) REFERENCES ',
@@ -143,6 +143,22 @@ SET @enchanting_items_create = CONCAT(
 PREPARE enchanting_items_create_statement FROM @enchanting_items_create;
 EXECUTE enchanting_items_create_statement;
 DEALLOCATE PREPARE enchanting_items_create_statement;
+
+SET @enchanting_bucket_expand = IF(
+    EXISTS (SELECT 1 FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = 'world_enchanting_table_items'
+        AND column_name = 'bucket_mob_data' AND ordinal_position = 9
+        AND data_type = 'varchar' AND column_type = 'varchar(512)'
+        AND character_maximum_length = 512 AND is_nullable = 'YES'
+        AND column_default IS NULL AND extra = ''
+        AND COALESCE(generation_expression, '') = ''
+        AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_unicode_ci'),
+    CONCAT('ALTER TABLE ', @enchanting_items,
+      ' MODIFY COLUMN `bucket_mob_data` LONGTEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL'),
+    'SELECT 1');
+PREPARE enchanting_bucket_expand_statement FROM @enchanting_bucket_expand;
+EXECUTE enchanting_bucket_expand_statement;
+DEALLOCATE PREPARE enchanting_bucket_expand_statement;
 
 SELECT CASE WHEN
     (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE()
@@ -168,8 +184,8 @@ SELECT CASE WHEN
     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'world_enchanting_table_items'
       AND column_name = 'shulker_id' AND ordinal_position = 8 AND data_type = 'int' AND column_type = 'int' AND is_nullable = 'YES' AND column_default IS NULL AND extra = '')
     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'world_enchanting_table_items'
-      AND column_name = 'bucket_mob_data' AND ordinal_position = 9 AND data_type = 'varchar' AND column_type = 'varchar(512)' AND is_nullable = 'YES'
-      AND column_default IS NULL AND extra = '' AND character_maximum_length = 512 AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_unicode_ci')
+      AND column_name = 'bucket_mob_data' AND ordinal_position = 9 AND data_type = 'longtext' AND column_type = 'longtext' AND is_nullable = 'YES'
+      AND column_default IS NULL AND extra = '' AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_unicode_ci')
     AND EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'world_enchanting_table_items'
       AND column_name = 'item_component_data' AND ordinal_position = 10 AND data_type = 'longtext' AND column_type = 'longtext' AND is_nullable = 'YES'
       AND column_default IS NULL AND extra = '' AND character_set_name = 'utf8mb4' AND collation_name = 'utf8mb4_unicode_ci')

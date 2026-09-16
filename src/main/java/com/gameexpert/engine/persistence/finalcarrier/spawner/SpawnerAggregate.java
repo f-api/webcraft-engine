@@ -48,7 +48,7 @@ public final class SpawnerAggregate {
             int state = SpawnerRules.stateForEntityKey(row.entityType());
             int expectedBlockId = SpawnerRules.carrierForEntityKey(row.entityType());
             int carrierBlockId = Short.toUnsignedInt(blockIds[row.packed()]);
-            if (state == 0 || expectedBlockId == 0 || carrierBlockId != expectedBlockId) {
+            if (state == 0 || expectedBlockId == 0 || !SpawnerRules.matchesCarrier(row.entityType(), carrierBlockId)) {
                 throw new IllegalArgumentException(
                         "SPWN entity key does not match exact carrier block evidence");
             }

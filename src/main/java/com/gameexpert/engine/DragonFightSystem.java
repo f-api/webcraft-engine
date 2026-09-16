@@ -255,8 +255,7 @@ final class DragonFightSystem implements DragonFight.Host {
         String encoded = fight.state().encode();
         long worldId = rt.worldId();
         DragonFightPersistenceService service = persistence;
-        if (rt.ctx().persistenceExecutor() == null) service.save(worldId, encoded);
-        else rt.ctx().persistenceExecutor().submitFuture(() -> service.save(worldId, encoded));
+        rt.submitDisposalPersistence(() -> service.save(worldId, encoded));
     }
 
     // ── 피해 진입점(몹 lane · 전투) ───────────────────────────────────────────────

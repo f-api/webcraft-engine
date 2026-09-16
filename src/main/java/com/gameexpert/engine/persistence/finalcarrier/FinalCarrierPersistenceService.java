@@ -683,22 +683,12 @@ public class FinalCarrierPersistenceService
             return StructureEntityDeathResult.UNSUPPORTED_TERMINAL;
         }
         if (decoded instanceof GeneratedStructureEntityFacts.Decoded) {
-            Pageable entityHistoryLimit = PageRequest.of(0,
-                    boundedRowLimit(FinalCarrierTickScheduler.MAX_PENDING_TICKS));
-            List<FinalCarrierLaneMutation> entityMutations = lanes
-                    .findAllByWorldIdAndChunkXAndChunkZAndLaneOrderById(worldId,
-                            binding.getChunkX(), binding.getChunkZ(),
-                            CanonicalWorldgenStore.Lane.ENTITIES.name(), entityHistoryLimit);
-            if (entityMutations.size() > FinalCarrierTickScheduler.MAX_PENDING_TICKS) {
-                throw durableState("generated entity ENTS mutation history exceeds bounds", null);
-            }
-            FinalCarrierLaneMutation mutation = entityMutations.stream()
-                    .filter(row -> row.getActivationStatus()
-                            == FinalCarrierLaneMutation.ActivationStatus.INSTALLED)
-                    .filter(row -> row.getInstallationIdentity().equals(
-                            binding.getLaneInstallationIdentity()))
-                    .findFirst().orElseThrow(() -> new IllegalStateException(
-                            "generated entity has no installed ENTS aggregate"));
+            List<FinalCarrierLaneMutation> matching = lanes.findInstalledEntityMutation(
+                    worldId, binding.getChunkX(), binding.getChunkZ(),
+                    binding.getLaneInstallationIdentity(), FinalCarrierLaneMutation.ActivationStatus.INSTALLED, PageRequest.of(0, 2));
+            if (matching.size() != 1) throw new IllegalStateException(
+                    "generated entity must have exactly one installed ENTS aggregate");
+            FinalCarrierLaneMutation mutation = matching.getFirst();
             NeutralFinalChunk.Sidecars exact = decodeStoredProjection(
                     mutation, CanonicalWorldgenStore.Lane.ENTITIES);
             StructureEntityActivation activation = prepareStructureEntityActivation(
@@ -1138,14 +1128,9 @@ public class FinalCarrierPersistenceService
             WorldRuntime.FinalCarrierGameplayInstaller gameplayInstaller) {
         Objects.requireNonNull(gameplayInstaller, "gameplay installer");
         requireWorldLock(worldId, "final-carrier recovery world is missing");
-        Pageable limit = PageRequest.of(0,
-                boundedRowLimit(FinalCarrierTickScheduler.MAX_PENDING_TICKS));
-        List<FinalCarrierLaneMutation> mutations = lanes.findAllByWorldIdOrderById(
-                worldId, limit);
-        if (mutations.size() > FinalCarrierTickScheduler.MAX_PENDING_TICKS) {
-            throw durableState("final-carrier recovery exceeds bounded mutation history", null);
-        }
-        recoverRows(mutations, gameplayInstaller);
+        forEachHistoryPage(worldId,
+                (after, page) -> lanes.findAllByWorldIdAndIdGreaterThanOrderById(worldId, after, page),
+                rows -> recoverRows(rows, gameplayInstaller), true);
     }
 
     /** Replays durable state when an acknowledged chunk becomes resident again. */
@@ -1221,16 +1206,45 @@ public class FinalCarrierPersistenceService
     private void recoverChunkRows(long worldId, int chunkX, int chunkZ,
             WorldRuntime.FinalCarrierGameplayInstaller gameplayInstaller) {
         requireWorldLock(worldId, "final-carrier recovery world is missing");
-        Pageable limit = PageRequest.of(0,
-                boundedRowLimit(FinalCarrierTickScheduler.MAX_PENDING_TICKS));
-        List<FinalCarrierLaneMutation> mutations = lanes
-                .findAllByWorldIdAndChunkXAndChunkZOrderById(
-                        worldId, chunkX, chunkZ, limit);
-        if (mutations.size() > FinalCarrierTickScheduler.MAX_PENDING_TICKS) {
-            throw durableState("final-carrier chunk recovery exceeds bounded mutation history",
-                    null);
+        forEachHistoryPage(worldId,
+                (after, page) -> lanes.findAllByWorldIdAndChunkXAndChunkZAndIdGreaterThanOrderById(
+                        worldId, chunkX, chunkZ, after, page),
+                rows -> {
+                    rows.forEach(row -> requireHistoryCoordinate(row, chunkX, chunkZ));
+                    recoverRows(rows, gameplayInstaller);
+                }, true);
+    }
+
+    private static final int HISTORY_PAGE_SIZE = 1024;
+
+    private void forEachHistoryPage(long worldId,
+            java.util.function.BiFunction<Long, Pageable, List<FinalCarrierLaneMutation>> fetch,
+            java.util.function.Consumer<List<FinalCarrierLaneMutation>> consume, boolean writes) {
+        long after = 0L;
+        Pageable pageRequest = PageRequest.of(0, HISTORY_PAGE_SIZE);
+        while (true) {
+            List<FinalCarrierLaneMutation> page = fetch.apply(after, pageRequest);
+            if (page.size() > HISTORY_PAGE_SIZE) throw durableState("history page exceeds requested bound", null);
+            if (page.isEmpty()) return;
+            for (FinalCarrierLaneMutation row : page) {
+                if (row == null || row.getId() == null || row.getId() <= after || row.getWorldId() != worldId) {
+                    throw durableState("history page has invalid ordering or world identity", null);
+                }
+                after = row.getId();
+            }
+            consume.accept(page);
+            if (tickRecoveryEntityManager != null) {
+                if (writes) tickRecoveryEntityManager.flush();
+                page.forEach(tickRecoveryEntityManager::detach);
+            }
+            if (page.size() < HISTORY_PAGE_SIZE) return;
         }
-        recoverRows(mutations, gameplayInstaller);
+    }
+
+    private static void requireHistoryCoordinate(FinalCarrierLaneMutation row, int chunkX, int chunkZ) {
+        if (row.getChunkX() != chunkX || row.getChunkZ() != chunkZ) {
+            throw durableState("history query returned a foreign coordinate", null);
+        }
     }
 
     private void recoverRows(List<FinalCarrierLaneMutation> mutations,
@@ -1457,11 +1471,11 @@ public class FinalCarrierPersistenceService
     }
 
     /**
-     * One recovery pass observes one immutable canonical snapshot per chunk. A saved world replays
+     * One recovery page observes one immutable canonical snapshot per chunk. A saved world replays
      * OWNR/LOOT/BENT/ENTS rows that share chunks, and each miss costs a full carrier blob read.
      * The pass runs inside one transaction and reuses that transaction's consistent read view for
      * a chunk instead of re-querying it, so caching does not change what the pass observes; the
-     * cache is discarded once the pass (recoverWorld/recoverChunk call) completes.
+     * cache is discarded after each bounded page rather than retaining all world carriers.
      */
     private CanonicalWorldgenStore.CanonicalChunkSnapshot recoveryCanonicalSnapshot(long worldId,
             int chunkX, int chunkZ,
@@ -2924,27 +2938,22 @@ public class FinalCarrierPersistenceService
         }
         for (String laneName : List.of(CanonicalWorldgenStore.Lane.BLOCK_TICKS.name(),
                 CanonicalWorldgenStore.Lane.FLUID_TICKS.name())) {
-            List<FinalCarrierLaneMutation> mutations = requestedChunkX == null
-                    ? lanes.findAllByWorldIdAndLaneOrderById(worldId, laneName, discoveryLimit)
-                    : lanes.findAllByWorldIdAndChunkXAndChunkZAndLaneOrderById(
-                            worldId, requestedChunkX, requestedChunkZ, laneName, discoveryLimit);
-            if (mutations.size() > FinalCarrierTickScheduler.MAX_PENDING_TICKS) {
-                throw durableState("tick lane mutation history exceeds bounds", null);
-            }
-            for (FinalCarrierLaneMutation mutation : mutations) {
-                TickPartitionKey key = mutationPartitionKey(worldId, mutation);
-                if (requestedChunkX != null
-                        && (key.chunkX() != requestedChunkX || key.chunkZ() != requestedChunkZ)) {
-                    throw durableState("tick lane mutation query returned a foreign coordinate",
-                            null);
-                }
-                discovered.add(key);
-                coordinates.add(partitionCoordinate(key));
-            }
+            forEachHistoryPage(worldId,
+                    (after, page) -> requestedChunkX == null
+                            ? lanes.findAllByWorldIdAndLaneAndIdGreaterThanOrderById(worldId, laneName, after, page)
+                            : lanes.findAllByWorldIdAndChunkXAndChunkZAndLaneAndIdGreaterThanOrderById(
+                                    worldId, requestedChunkX, requestedChunkZ, laneName, after, page),
+                    mutations -> mutations.forEach(mutation -> {
+                        if (!laneName.equals(mutation.getLane())) throw durableState("tick history query returned a foreign lane", null);
+                        TickPartitionKey key = mutationPartitionKey(worldId, mutation);
+                        if (requestedChunkX != null) requireHistoryCoordinate(mutation, requestedChunkX, requestedChunkZ);
+                        discovered.add(key);
+                        coordinates.add(partitionCoordinate(key));
+                    }), false);
         }
+
         ArrayList<FinalCarrierTickScheduler.ScheduledTick> result = new ArrayList<>();
-        // One locked restore observes one immutable canonical snapshot per chunk. BLOCK/FLUID
-        // discovery and partition validation must not reload the same full carrier four times.
+        // Keep only the current coordinate's carrier while validating discovered partitions.
         Map<Long, CanonicalWorldgenStore.CanonicalChunkSnapshot> snapshots = new HashMap<>();
         Comparator<TickPartitionCoordinate> coordinateOrder =
                 Comparator.comparingLong(TickPartitionCoordinate::worldId)
@@ -2953,6 +2962,7 @@ public class FinalCarrierPersistenceService
                         .thenComparing(TickPartitionCoordinate::lane);
         for (TickPartitionCoordinate coordinate : coordinates.stream().sorted(coordinateOrder)
                 .toList()) {
+            snapshots.clear();
             TickPartitionKey current = currentTickPartitionKey(coordinate, snapshots);
             if (!discovered.contains(current)) continue;
             long chunkKey = ((long) coordinate.chunkX() << 32)

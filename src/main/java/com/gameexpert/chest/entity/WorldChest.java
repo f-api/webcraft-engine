@@ -4,6 +4,8 @@ import com.gameexpert.engine.ChestInventory;
 import com.gameexpert.engine.enchant.EnchantmentRules;
 import com.gameexpert.engine.enchant.WideEnchantments;
 import com.gameexpert.engine.inventory.PlayerInventory;
+import com.gameexpert.engine.inventory.ItemComponentData;
+import com.gameexpert.engine.inventory.ItemComponentCodec;
 import com.gameexpert.engine.persistence.finalcarrier.loot.CanonicalLootContainerKind;
 import com.gameexpert.engine.persistence.finalcarrier.loot.CanonicalLootStoredResolution;
 import com.gameexpert.terrain.Blocks;
@@ -127,7 +129,8 @@ public class WorldChest {
     public static final int WIDE_MATERIALIZER_VERSION = 2;
     /** Policy selected by every fresh canonical installation. */
     public static final int EXPLORER_MAP_MATERIALIZER_VERSION = 3;
-    public static final int CURRENT_MATERIALIZER_VERSION = EXPLORER_MAP_MATERIALIZER_VERSION;
+    public static final int COMPONENT_MATERIALIZER_VERSION = 4;
+    public static final int CURRENT_MATERIALIZER_VERSION = COMPONENT_MATERIALIZER_VERSION;
     /** Frozen pre-Blast projector domain; never advance these with the live registry. */
     private static final int LEGACY_ENCHANTMENT_COUNT = 15;
     /** Frozen version-1 projector domain (the historical 48-bit mask, IDs 0..15). */
@@ -267,7 +270,8 @@ public class WorldChest {
 
     private static void requireMaterializerVersion(int version) {
         if (version != LEGACY_MATERIALIZER_VERSION && version != STRICT_MATERIALIZER_VERSION
-                && version != WIDE_MATERIALIZER_VERSION && version != EXPLORER_MAP_MATERIALIZER_VERSION) {
+                && version != WIDE_MATERIALIZER_VERSION && version != EXPLORER_MAP_MATERIALIZER_VERSION
+                && version != COMPONENT_MATERIALIZER_VERSION) {
             throw new IllegalStateException("unknown canonical loot materializer version");
         }
     }
@@ -288,11 +292,17 @@ public class WorldChest {
         for (int slotIndex = 0; slotIndex < resolution.slots().size(); slotIndex++) {
             CanonicalLootStoredResolution.Slot slot = resolution.slots().get(slotIndex);
             if (slot == null) continue;
+            if (materializerVersion < COMPONENT_MATERIALIZER_VERSION
+                    && slot.itemKey().equals("minecraft:bamboo_hanging_sign"))
+                throw new IllegalStateException("unsupported canonical item " + slot.itemKey());
             int mapId = 0;
             boolean mapComponentSeen = false;
             WideEnchantments enchantments = WideEnchantments.EMPTY;
             String potionKey = null;
             Integer ominousAmplifier = null;
+            Integer damage = null;
+            String instrument = null;
+            CanonicalLootStoredResolution.StewEffect stew = null;
             for (CanonicalLootStoredResolution.Component component : slot.components().values()) {
                 if (component == null) throw new IllegalStateException("null canonical component");
                 switch (component.kind()) {
@@ -360,6 +370,24 @@ public class WorldChest {
                         }
                         ominousAmplifier = component.amplifier();
                     }
+                    case "DAMAGE" -> {
+                        if (materializerVersion < COMPONENT_MATERIALIZER_VERSION || component.damage() == null)
+                            throw new IllegalStateException("unsupported canonical component");
+                        damage = component.damage();
+                    }
+                    case "INSTRUMENT" -> {
+                        if (materializerVersion < COMPONENT_MATERIALIZER_VERSION
+                                || !"minecraft:goat_horn".equals(slot.itemKey()))
+                            throw new IllegalStateException("unsupported canonical component");
+                        instrument = component.instrumentKey();
+                    }
+                    case "SUSPICIOUS_STEW_EFFECTS" -> {
+                        if (materializerVersion < COMPONENT_MATERIALIZER_VERSION
+                                || !"minecraft:suspicious_stew".equals(slot.itemKey())
+                                || component.stewEffects().size() != 1)
+                            throw new IllegalStateException("unsupported canonical component");
+                        stew = component.stewEffects().getFirst();
+                    }
                     case "ITEM_NAME", "MAP_DECORATIONS" -> {
                         if ("MAP_DECORATIONS".equals(component.kind())
                                 && !"minecraft:map".equals(slot.itemKey())
@@ -375,7 +403,10 @@ public class WorldChest {
             if (isCanonicalPotionItem(slot.itemKey(), legacy) != (potionKey != null)) {
                 throw new IllegalStateException("canonical potion identity is incomplete");
             }
-            short itemType = canonicalItemType(slot.itemKey(), potionKey, mapId, legacy);
+            short itemType = stew != null ? PlayerInventory.SUSPICIOUS_STEW_POPPY
+                    : canonicalItemType(slot.itemKey(), potionKey, mapId, legacy);
+            if ("minecraft:suspicious_stew".equals(slot.itemKey()) && stew == null)
+                throw new IllegalStateException("canonical stew effect is incomplete");
             // Replaying versions 0..2 must reproduce their generic-map item identity exactly.
             if (materializerVersion < EXPLORER_MAP_MATERIALIZER_VERSION
                     && PlayerInventory.isExplorerMap(itemType)) {
@@ -397,19 +428,39 @@ public class WorldChest {
             }
             Integer durability = PlayerInventory.isDurable(itemType)
                     ? PlayerInventory.initialDurability(itemType) : null;
+            if (damage != null) {
+                int canonicalMaximum = switch (slot.itemKey()) {
+                    case "minecraft:stone_axe", "minecraft:stone_pickaxe" -> 131;
+                    case "minecraft:iron_axe" -> 250;
+                    case "minecraft:diamond_axe", "minecraft:diamond_pickaxe" -> 1561;
+                    case "minecraft:golden_axe", "minecraft:golden_pickaxe" -> 32;
+                    case "minecraft:shield" -> 336;
+                    default -> 0;
+                };
+                if (durability == null || canonicalMaximum == 0 || damage < 0 || damage >= canonicalMaximum)
+                    throw new IllegalStateException("canonical damage is outside item durability");
+                // Gameplay tiers have different maxima; retain the generated remaining fraction.
+                durability = Math.max(1, (int) ((long) durability * (canonicalMaximum - damage) / canonicalMaximum));
+            }
             if (enchantments.hasExtended()
                     && !EnchantmentRules.isValidEnchantmentsForItem(itemType, enchantments)) {
                 throw new IllegalStateException("canonical enchantments do not fit the gameplay item");
             }
             // [ENCHANT-WIDE] ID 16 이상은 성분 문자열(WCIC4)이 싣는다. 확장이 없으면 null 그대로라
             // 버전 0·1 의 투영 결과는 바이트 단위로 같다.
+            ItemComponentData components = ItemComponentCodec.decode(itemType, potionComponents);
+            if (ominousAmplifier != null) components = components.withOminousBottleAmplifier(ominousAmplifier);
+            if (instrument != null) components = components.withInstrument(instrument);
+            if (stew != null) {
+                if (!stew.effectKey().startsWith("minecraft:"))
+                    throw new IllegalStateException("invalid canonical stew effect");
+                components = components.withSuspiciousStewEffect(
+                        stew.effectKey().substring("minecraft:".length()), stew.duration());
+            }
             projected.add(new ChestItem(slotIndex, itemType, slot.count(), durability,
                     enchantments.word0() == 0L ? null : enchantments.word0(),
                     mapId == 0 ? null : mapId, null, null,
-                    com.gameexpert.engine.inventory.ItemComponentCodec.withEnchantments(itemType,
-                            ominousAmplifier == null ? potionComponents
-                                    : PlayerInventory.ominousBottleComponents(ominousAmplifier),
-                            enchantments)));
+                    ItemComponentCodec.encode(itemType, components.withEnchantments(enchantments))));
         }
         return List.copyOf(projected);
     }

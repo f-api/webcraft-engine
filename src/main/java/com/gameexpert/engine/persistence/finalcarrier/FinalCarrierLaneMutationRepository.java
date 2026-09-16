@@ -79,6 +79,15 @@ public interface FinalCarrierLaneMutationRepository
                     Collection<FinalCarrierLaneMutation.ActivationStatus> activationStatuses,
                     Pageable limit);
 
+    @Query("select row from FinalCarrierLaneMutation row where row.worldId = :worldId "
+            + "and row.chunkX = :chunkX and row.chunkZ = :chunkZ and row.lane = 'ENTITIES' "
+            + "and row.activationStatus = :status "
+            + "and row.installationIdentity = :identity order by row.id")
+    List<FinalCarrierLaneMutation> findInstalledEntityMutation(@Param("worldId") long worldId,
+            @Param("chunkX") int chunkX, @Param("chunkZ") int chunkZ,
+            @Param("identity") String identity,
+            @Param("status") FinalCarrierLaneMutation.ActivationStatus status, Pageable pageable);
+
     /**
      * Removes every canonical row this world owns. World deletion must clear the canonical
      * tables in the same transaction, otherwise the rows outlive the world and a re-created

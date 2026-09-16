@@ -1,0 +1,216 @@
+--- a/client/src/world/blocks.ts
++++ b/client/src/world/blocks.ts
+@@ -3456,7 +3456,8 @@
+ export function isConcreteStairs(id: number): boolean { return id >= WHITE_CONCRETE_STAIRS && id <= BLACK_CONCRETE_STAIRS; }
+ export function isConcreteSlab(id: number): boolean { return id >= WHITE_CONCRETE_SLAB && id <= BLACK_CONCRETE_SLAB; }
+ export const OPEN_EYEBLOSSOM = 2515;
+-export const BLOCK_ID_HIGH_WATER = 2515;
++export const BAMBOO_HANGING_SIGN = 2516;
++export const BLOCK_ID_HIGH_WATER = 2516;
+ // 할당 상한은 차원 예약 끝(END_BLOCK_RESERVED_END)을 언제나 덮어야 한다 — 예약 ID 가 나중에 월드
+ // 블록으로 활성화될 때 청크 코덱 상한이 조용히 그 아래에 머물지 않게 한다(Java Blocks 정적 검사와 같은 뜻).
+ if (BLOCK_ID_HIGH_WATER < END_BLOCK_RESERVED_END) {
+@@ -3593,7 +3594,7 @@
+ // 경험치 병 2339, [MACE] 조율자 배정 2370 의 철퇴(`ui/items.ts` MACE), [UTILITY] 월드 블록 2380~2382 ·
+ // 순수 아이템 2383~2416(ui/items.ts) · 흑암석 계열 월드 블록 2417~2419 가 붙었고, [CONTAINER-MENUS] 갑옷
+ // 거치대 · 광산 수레 2430~2435(`ui/items.ts`)가 이어진다. 벌레잡이풀 2429와 살점 블록 2436~2437도 등록되어 있다.
+-export const PROTOCOL_ID_HIGH_WATER = 2515;
++export const PROTOCOL_ID_HIGH_WATER = 2516;
+ /** Append-only block/item protocol table capacity, independent from world-block metadata. */
+ export const PROTOCOL_ID_TABLE_CAPACITY = 4096;
+ // 서버 Blocks와 공유하는 현재 메타데이터 테이블 용량. 심층암 가공 계열이 512를 넘으면서
+--- a/client/src/world/BlockRegistry.ts
++++ b/client/src/world/BlockRegistry.ts
+@@ -92,7 +92,7 @@
+   CINNABAR_BRICK_WALL, CINNABAR_WALL, POLISHED_CINNABAR_WALL,
+   STONE_BUTTON, END_PORTAL_FRAME, END_PORTAL, END_GATEWAY,
+   RED_CANDLE, GREEN_CANDLE, PURPLE_CANDLE, BROWN_CANDLE,
+-  SPRUCE_HANGING_SIGN, OAK_HANGING_SIGN, FLOWER_POT, BARRIER, CRYING_OBSIDIAN,
++  SPRUCE_HANGING_SIGN, OAK_HANGING_SIGN, BAMBOO_HANGING_SIGN, FLOWER_POT, BARRIER, CRYING_OBSIDIAN,
+   BAMBOO_FENCE, WHITE_WOOL_STAIRS, WHITE_WALL_BANNER,
+   CANDLE, MANGROVE_WOOD, POTTED_DEAD_BUSH, HOPPER, OAK_BUTTON, OAK_SLAB,
+   OAK_PRESSURE_PLATE, POTTED_RED_TULIP, STONE_PRESSURE_PLATE, MANGROVE_LOG,
+@@ -1210,6 +1210,12 @@
+   name: "참나무 매달린 팻말",
+   tiles: { top: TILE.PLANK, side: TILE.PLANK, bottom: TILE.PLANK },
+ };
++REGISTRY[BAMBOO_HANGING_SIGN] = {
++  ...REGISTRY[POPLAR_HANGING_SIGN],
++  id: BAMBOO_HANGING_SIGN,
++  name: "대나무 매달린 팻말",
++  tiles: { top: TILE.BAMBOO_STALK, side: TILE.BAMBOO_STALK, bottom: TILE.BAMBOO_STALK },
++};
+ REGISTRY[FLOWER_POT] = {
+   ...REGISTRY[POTTED_RED_MUSHROOM],
+   id: FLOWER_POT,
+--- a/client/src/ui/items.ts
++++ b/client/src/ui/items.ts
+@@ -6,7 +6,7 @@
+ import { blockMeta, registeredBlockMeta } from "../world/BlockRegistry";
+ import {
+   ABYSS_STONE, AIR, FLESH_BLOCK, FLESH_COCOON, FLESH_HEART, isFleshTissue,
+-  MYSTERY_FLESH, FLESH_FIBER, FLESH_CLOT_SAC, FLESH_FAT, FLESH_MEMBRANE, FLESH_BONE_PLATE, FLESH_HOOK_CLAW, CARVED_PUMPKIN, KELP, OAK_HANGING_SIGN, PROTOCOL_ID_HIGH_WATER,
++  MYSTERY_FLESH, FLESH_FIBER, FLESH_CLOT_SAC, FLESH_FAT, FLESH_MEMBRANE, FLESH_BONE_PLATE, FLESH_HOOK_CLAW, CARVED_PUMPKIN, KELP, OAK_HANGING_SIGN, BAMBOO_HANGING_SIGN, PROTOCOL_ID_HIGH_WATER,
+   SPRUCE_HANGING_SIGN, isShulkerBox,
+ } from "../world/blocks";
+ 
+@@ -1669,7 +1669,7 @@
+     // [GOLD-FOOD] 꿀이 든 병의 바닐라 max_stack_size 도 16 이다.
+     : itemType === EGG || itemType === BLUE_EGG || itemType === BROWN_EGG
+       || itemType === SPOILED_EGG || itemType === HONEY_BOTTLE
+-      || itemType === SPRUCE_HANGING_SIGN || itemType === OAK_HANGING_SIGN
++      || itemType === SPRUCE_HANGING_SIGN || itemType === OAK_HANGING_SIGN || itemType === BAMBOO_HANGING_SIGN
+       // [CONTAINER-MENUS] 갑옷 거치대의 바닐라 max_stack_size 도 16 이다.
+       || itemType === ARMOR_STAND
+     ? EGG_STACK_MAX
+--- a/client/src/ui/icons.ts
++++ b/client/src/ui/icons.ts
+@@ -1,3 +1,5 @@
++import { BAMBOO_HANGING_SIGN } from "../world/blocks";
++import { BAMBOO_HANGING_SIGN_ICON } from "./bambooHangingSignIcon";
+ // 핫바/인벤 아이콘 생성 — 마인크래프트 스타일 절차 픽셀아트. 외부 이미지 파일 0.
+ //  · 블록류: 바닐라 아이템 모델(engine/ItemModelMesh — 월드 메셔 형상 + 모델 display.gui)을 GUI
+ //    직교 투영으로 그린다. 바닐라 아이템 모델이 평면 스프라이트면 그 텍셀(또는 블록 타일) 한 장이다.
+@@ -35,7 +37,7 @@
+ import {
+   FISHING_ROD_CAST_LAYOUT,
+   FISHING_ROD_LAYOUT,
+-  ITEM_ICON_LAYOUTS,
++  ITEM_ICON_LAYOUTS as GENERATED_ITEM_ICON_LAYOUTS,
+   LINGERING_POTION_LAYOUT,
+   POTION_LAYOUT,
+   SHIELD_LAYOUT,
+@@ -65,6 +67,8 @@
+   isLingeringPotion, isTippedArrow,
+   CONTENTS_SPLASH_POTION, CONTENTS_LINGERING_POTION,
+ } from "./items";
++
++const ITEM_ICON_LAYOUTS = new Map([...GENERATED_ITEM_ICON_LAYOUTS, [BAMBOO_HANGING_SIGN, BAMBOO_HANGING_SIGN_ICON] as const]);
+ 
+ let atlasCanvas: HTMLCanvasElement | null = null;
+ const cache = new Map<number, string>();
+@@ -907,3 +911,4 @@
+   cache.set(itemType, url);
+   return url;
+ }
++
+--- a/client/src/audio/SemanticSoundRegistry.ts
++++ b/client/src/audio/SemanticSoundRegistry.ts
+@@ -637,6 +637,13 @@
+ add("item.bone_meal.use", SAMPLE_CATALOG.farming.bonemeal, "뼛가루를 사용함", { subtitleKey: "subtitles.item.bone_meal.use", range: 16, policy: "one-shot", gain: .09 });
+ // 염소 뿔과 레이드 전리품 악기는 각각 독립된 절차 패밀리이며 효과 없이 소리만 낸다.
+ add("item.goat_horn.play", SAMPLE_CATALOG.items.goatHorn, "염소 뿔이 멀리 울림", { subtitleKey: "subtitles.item.goat_horn.play", range: 256, policy: "one-shot", gain: .2, playbackRate: 1 });
++// Eight server-selected instruments retain distinct timbres using our original procedural samples.
++(["ponder", "sing", "seek", "feel", "admire", "call", "yearn", "dream"] as const)
++  .forEach((instrument, index) => add(`item.goat_horn.play.${instrument}`,
++    [SAMPLE_CATALOG.items.goatHorn[index % 2]], "염소 뿔이 멀리 울림", {
++      subtitleKey: "subtitles.item.goat_horn.play", range: 256, bus: "record",
++      policy: "one-shot", gain: .2, playbackRate: 2 ** ((index - 3) / 12),
++    }));
+ add("item.battering_horn.play", SAMPLE_CATALOG.items.batteringHorn, "뿔피리가 울림", { subtitleKey: "subtitles.item.battering_horn.play", range: 48, policy: "one-shot", gain: .2 });
+ add("item.illager_music_box.play", SAMPLE_CATALOG.items.illagerOrgel, "오르골이 우민 군가를 연주함", { subtitleKey: "subtitles.item.illager_music_box.play", range: 12, policy: "one-shot", gain: .16 });
+ add("item.totem.use", SAMPLE_CATALOG.items.totemUse, "불사의 토템이 발동함", { subtitleKey: "subtitles.item.totem.use", range: 16, policy: "one-shot", gain: .22 });
+--- a/client/src/net/Protocol.ts
++++ b/client/src/net/Protocol.ts
+@@ -1230,7 +1230,7 @@
+   | "firework_launch" | "firework_blast"
+   // 염소 뿔 및 레이드 전리품 아이템 사용. 효과가 0 이라 소리/파티클만 파생한다.
+   // blockType 은 쓰지 않으므로 0 으로 보낸다.
+-  | "goat_horn" | "battering_horn" | "illager_music_box" | "petal_pouch"
++  | "goat_horn" | `goat_horn_${"ponder" | "sing" | "seek" | "feel" | "admire" | "call" | "yearn" | "dream"}` | "battering_horn" | "illager_music_box" | "petal_pouch"
+   // [DEEP-DARK] 스컬크 전용 음향군. 두 kind 는 Java `SculkVibrationSystem.SOUND_SENSOR_CLICK` ·
+   // `SOUND_SHRIEK` 문자열과 같아야 한다(양 권위가 같은 값을 방송한다). blockType 은 울린
+   // 부속의 블록 ID 다.
+--- a/client/src/game.ts
++++ b/client/src/game.ts
+@@ -4928,6 +4928,14 @@
+         case "firework_launch": semantic("entity.firework_rocket.launch"); break;
+         case "firework_blast": semantic("entity.firework_rocket.blast"); break;
+         case "goat_horn": semantic("item.goat_horn.play"); break;
++        case "goat_horn_ponder": semantic("item.goat_horn.play.ponder"); break;
++        case "goat_horn_sing": semantic("item.goat_horn.play.sing"); break;
++        case "goat_horn_seek": semantic("item.goat_horn.play.seek"); break;
++        case "goat_horn_feel": semantic("item.goat_horn.play.feel"); break;
++        case "goat_horn_admire": semantic("item.goat_horn.play.admire"); break;
++        case "goat_horn_call": semantic("item.goat_horn.play.call"); break;
++        case "goat_horn_yearn": semantic("item.goat_horn.play.yearn"); break;
++        case "goat_horn_dream": semantic("item.goat_horn.play.dream"); break;
+         case "battering_horn": semantic("item.battering_horn.play"); break;
+         case "illager_music_box": semantic("item.illager_music_box.play"); break;
+         // [DEEP-DARK] 스컬크 부속. 감지체 클릭은 짧은 신호음, 비명체는 워든을 부르는 긴 비명이다.
+--- a/client/src/backend/standalone/StandaloneSuspiciousStew.ts
++++ b/client/src/backend/standalone/StandaloneSuspiciousStew.ts
+@@ -109,6 +109,7 @@
+ ): component is SuspiciousStewComponent {
+   if (component === null || component === undefined ||
+       !Number.isSafeInteger(component.durationMcTicks)) return false;
++  if (component.effect === "saturation" && component.durationMcTicks >= 7 && component.durationMcTicks <= 10) return true;
+   if (component.effect === "blindness" && component.durationMcTicks === 220) return true;
+   if (component.effect === "nausea" && component.durationMcTicks === 140) return true;
+   const candidate = ARCHAEOLOGY_STEW_EFFECTS.find((entry) => entry.effect === component.effect);
+--- a/client/src/net/Protocol.sound.test.ts
++++ b/client/src/net/Protocol.sound.test.ts
+@@ -27,7 +27,7 @@
+       "bucket_empty_water" | "bucket_empty_lava" | "till" | "shovel" | "plant" |
+       "bonemeal" | "shears" | "campfire_extinguish" | "campfire_light" | "ignite" | "tnt_prime" | "cow_milk" |
+       "fishing_cast" | "fishing_bite" | "firework_launch" | "firework_blast" |
+-      "goat_horn" | "battering_horn" | "petal_pouch" | "illager_music_box" |
++      "goat_horn" | `goat_horn_${"ponder" | "sing" | "seek" | "feel" | "admire" | "call" | "yearn" | "dream"}` | "battering_horn" | "petal_pouch" | "illager_music_box" |
+       // [DEEP-DARK] 스컬크 전용 음향군. Java `SculkVibrationSystem.SOUND_SENSOR_CLICK` ·
+       // `SOUND_SHRIEK` · `WsMessages.WorldSound.KINDS` 와 같은 두 문자열이다.
+       "sculk_sensor_click" | "sculk_shriek" | "shelf_mushroom_bounce" |
+--- /dev/null
++++ b/client/src/ui/bambooHangingSignIcon.ts
+@@ -0,0 +1,12 @@
++import type { ItemIconLayout } from "./itemIconLayouts";
++
++/** Procedural bamboo slats and chains; no external image input. */
++export const BAMBOO_HANGING_SIGN_ICON: ItemIconLayout = {
++  rows: [
++    "................", "...0........0...", "...1........1...", "...0........0...",
++    "..222222222222..", "..233233233232..", "..244244244242..", "..233233233232..",
++    "..222222222222..", "..233233233232..", "..244244244242..", "..233233233232..",
++    "..222222222222..", "................", "................", "................",
++  ],
++  palette: ["#737373", "#a8a8a8", "#796629", "#d0bd64", "#ae9a48"],
++};
+--- /dev/null
++++ b/client/src/world/AssignmentLootClient.test.ts
+@@ -0,0 +1,37 @@
++import { describe, expect, it } from "vitest";
++import { BAMBOO_HANGING_SIGN, BLOCK_ID_HIGH_WATER, PROTOCOL_ID_HIGH_WATER } from "./blocks";
++import { blockMeta } from "./BlockRegistry";
++import { itemName, stackMax } from "../ui/items";
++import { BAMBOO_HANGING_SIGN_ICON } from "../ui/bambooHangingSignIcon";
++import { SOUND_PROFILES } from "../audio/SemanticSoundRegistry";
++import { validStandaloneArchaeologyStewComponent } from "../backend/standalone/StandaloneSuspiciousStew";
++
++describe("engine loot client compatibility", () => {
++  it("registers bamboo hanging signs without replacing an existing protocol ID", () => {
++    expect(BAMBOO_HANGING_SIGN).toBe(2516);
++    expect(BLOCK_ID_HIGH_WATER).toBeGreaterThanOrEqual(BAMBOO_HANGING_SIGN);
++    expect(PROTOCOL_ID_HIGH_WATER).toBeGreaterThanOrEqual(BAMBOO_HANGING_SIGN);
++    expect(blockMeta(BAMBOO_HANGING_SIGN)).toMatchObject({ shape: "banner", solid: false });
++    expect(itemName(BAMBOO_HANGING_SIGN)).toBe("대나무 매달린 팻말");
++    expect(stackMax(BAMBOO_HANGING_SIGN)).toBe(16);
++    expect(BAMBOO_HANGING_SIGN_ICON.rows).toHaveLength(16);
++    expect(BAMBOO_HANGING_SIGN_ICON.rows.every(row => row.length === 16)).toBe(true);
++  });
++
++  it("plays eight stable instrument variants through the records bus", () => {
++    const instruments = ["ponder", "sing", "seek", "feel", "admire", "call", "yearn", "dream"];
++    const profiles = instruments.map(name => SOUND_PROFILES[`item.goat_horn.play.${name}`]);
++    profiles.forEach(profile => expect(profile).toMatchObject({ bus: "record", range: 256, policy: "one-shot" }));
++    expect(new Set(profiles.map(profile => `${profile.samples[0]}:${profile.playbackRate}`)).size).toBe(8);
++    expect(SOUND_PROFILES["item.goat_horn.play"]).toBeDefined();
++  });
++
++  it("accepts instant saturation loot ticks while retaining archaeology values", () => {
++    [7, 8, 9, 10, 140, 160, 180, 200].forEach(durationMcTicks => {
++      expect(validStandaloneArchaeologyStewComponent({ effect: "saturation", durationMcTicks })).toBe(true);
++    });
++    [6, 11, 141].forEach(durationMcTicks => {
++      expect(validStandaloneArchaeologyStewComponent({ effect: "saturation", durationMcTicks })).toBe(false);
++    });
++  });
++});
