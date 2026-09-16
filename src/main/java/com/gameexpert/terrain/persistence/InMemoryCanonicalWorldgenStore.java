@@ -45,6 +45,20 @@ public final class InMemoryCanonicalWorldgenStore
     }
 
     @Override
+    public synchronized CanonicalChunkSnapshot commitGeneratedDeclaration(ChunkCommit commit) {
+        Objects.requireNonNull(commit, "canonical generation declaration");
+        com.gameexpert.world.WorldGenerationProfiles.requireSupportedBaselineId(commit.worldIdentity());
+        CanonicalChunkSnapshot existing = find(commit.worldId(), commit.chunkX(), commit.chunkZ());
+        if (existing != null) {
+            if (!commit.worldIdentity().equals(existing.commit().worldIdentity())) {
+                throw new IllegalStateException("canonical persisted profile mismatch");
+            }
+            return existing;
+        }
+        return commit(commit);
+    }
+
+    @Override
     public synchronized CanonicalChunkSnapshot commit(ChunkCommit commit) {
         Key key = new Key(commit.worldId(), commit.chunkX(), commit.chunkZ());
         Entry previous = entries.get(key);

@@ -39,6 +39,15 @@ public interface CanonicalWorldgenStore {
         throw new IllegalStateException("atomic structure snapshot is unavailable");
     }
 
+    /**
+     * Publishes CURRENT generation declarations without reading mutable world references.
+     * Implementations retain world/profile serialization and replay an existing immutable winner.
+     * Located-map references are resolved later, when the declared loot is opened.
+     */
+    default CanonicalChunkSnapshot commitGeneratedDeclaration(ChunkCommit commit) {
+        throw new IllegalStateException("declaration publication is unavailable");
+    }
+
     /** False discards a stale proposal; callers reread committed state and regenerate as needed. */
     default boolean commitFromSnapshot(ChunkCommit commit, String expectedReferenceReceipt) {
         throw new IllegalStateException("atomic profile publication is unavailable");

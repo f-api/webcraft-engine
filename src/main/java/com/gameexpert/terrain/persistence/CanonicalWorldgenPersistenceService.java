@@ -52,6 +52,29 @@ public class CanonicalWorldgenPersistenceService
     }
 
     @Override @Transactional
+    public CanonicalChunkSnapshot commitGeneratedDeclaration(ChunkCommit commit) {
+        Objects.requireNonNull(commit, "canonical generation declaration");
+        if (worlds == null) throw new IllegalStateException("world-bound canonical publication unavailable");
+        com.gameexpert.api.persistence.WorldAccess world = worlds.findByIdForUpdate(commit.worldId())
+                .orElseThrow(() -> new IllegalStateException("canonical publication world is absent"));
+        com.gameexpert.world.WorldGenerationProfile profile =
+                com.gameexpert.world.WorldGenerationProfiles.requireSupported(world.generationProfile());
+        if (!profile.getBaselineId().equals(commit.worldIdentity())) {
+            throw new IllegalStateException("canonical publication profile mismatch");
+        }
+        CanonicalChunkSnapshot existing = find(commit.worldId(), commit.chunkX(), commit.chunkZ());
+        if (existing != null) {
+            if (!profile.getBaselineId().equals(existing.commit().worldIdentity())) {
+                throw new IllegalStateException("canonical persisted profile mismatch");
+            }
+            // Another producer may have won with a different activation time. Replay its
+            // verified immutable product rather than replacing it with this proposal.
+            return existing;
+        }
+        return commitMember(commit);
+    }
+
+    @Override @Transactional
     public CanonicalChunkSnapshot commit(ChunkCommit commit) {
         return commitMember(commit);
     }
