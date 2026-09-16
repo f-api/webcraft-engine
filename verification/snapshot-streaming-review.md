@@ -30,6 +30,8 @@ The original published producer archive and producer identity remain unchanged. 
 
 ## Separate reproduced map defect
 
+Subsequently fixed by the [map result conversion change](map-loot-fix-review.md). The following records the original finding.
+
 An authenticated shipwreck-map fixture fails in both the original published worker and the streaming worker. `Mc263ContainerLootResolver` emits a buried-treasure map with maximum stack size 1, while the V2 stored-result contract requires 64. `CanonicalLootStoredResolution.Slot` rejects the mismatch. This is independent of cumulative snapshot size and was not silently changed in the immutable producer. Successful map gameplay must not be claimed from this verification. Reproduction source and old/new failure evidence are retained with the runtime evidence.
 
 Natural camp fixture attempts had no map-bearing loot declaration and therefore were not accepted as positive map tests.

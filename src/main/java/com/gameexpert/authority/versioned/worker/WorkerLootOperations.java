@@ -62,8 +62,7 @@ final class WorkerLootOperations {
             var resolved=runner==null
                     ? Mc263ContainerLootResolver.resolveLocated(worldSeed,table,seed,originX,originY,originZ,slots,initial,located)
                     : runner.resolve(worldSeed,table,seed,originX,originY,originZ,slots,initial,located);
-            CanonicalLootStoredResolution stored = (CanonicalLootStoredResolution) CanonicalLootStoredResolution.class
-                    .getMethod("fromV2", Mc263ContainerLootResolver.Resolution.class).invoke(null, resolved);
+            CanonicalLootStoredResolution stored = WorkerLootResultEncoding.encode(resolved);
             byte[] result=stored.encode();
             out.writeInt(result.length);out.write(result);
         } else out.writeBoolean(true);
