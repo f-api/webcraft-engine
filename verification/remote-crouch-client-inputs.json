@@ -1,0 +1,42 @@
+[
+  {
+    "path": "client/src/entities/RemotePlayer.ts",
+    "baseSha256": "bd23fe5b821deefb690d13a08854b123de52690de15b66aa8561a376edbe3062",
+    "candidateSha256": "16f3bec9f5a6528d0e5915552feef8072047b92aa4fa3ab6e7018ea4eae6eda7"
+  },
+  {
+    "path": "client/src/entities/EntityManager.ts",
+    "baseSha256": "dccaee532f3b3abac3fafedcf2def3a0ed3c09d025a17af90d5102f2a29cc95d",
+    "candidateSha256": "14dfc269f15b550e651668ebf42340f0bcc41df0edf3f3cc188cd3ad3666856d"
+  },
+  {
+    "path": "client/src/entities/RemotePlayerSwing.test.ts",
+    "baseSha256": "c01a417f4ff1799c600283f949aa1ce613fdd1ebc0ecea175b702994cbf8b382",
+    "candidateSha256": "f734b1e5eda2bff446c992b290cf8c6205e2d3fc27156fa0f10c0e16d936c085"
+  },
+  {
+    "path": "client/src/entities/EntityManager.test.ts",
+    "baseSha256": "e9c66a6ffdd5097a2a124700e855043782273b1fda4dc2c9dab59e9e1d716d2c",
+    "candidateSha256": "adc032aba7347594cd66bc56e3d66274df353c2320d3de2a027b74bf9977c835"
+  },
+  {
+    "path": "client/src/entities/EntityManager.effects.test.ts",
+    "baseSha256": "bebe9309244d955f96aa3d5a0fae3b3d3bb537637eb073fc013ef770acf28016",
+    "candidateSha256": "a0e4e33f6a4b92b4211acfd6035c37c053a8a5a02ae3e1c6c826a88cae3edce4"
+  },
+  {
+    "path": "client/src/net/Protocol.ts",
+    "baseSha256": "4dddf4ac1342dffb5c8b7f9bd7ac626ecccf298c10cc2e2f3a229aaf8fc17620",
+    "candidateSha256": "c01eb0969caa7da9bb3a7ee86a39c03f47d9b63cb9c98e092ef7575227b598bd"
+  },
+  {
+    "path": "client/src/game.ts",
+    "baseSha256": "fd74d31e8e32d48bef7a2e1040a1564550412b7a937cd6a90d1e55a97f723b60",
+    "candidateSha256": "7e724e7ea6e95e0edc7e65d25c5bd7cd8f0804a2432f0a2925bdc8208644c255"
+  },
+  {
+    "path": "client/src/backend/standalone/StandaloneWorldRuntime.ts",
+    "baseSha256": "471820a38c373dcb577539d6308d021f9830a46ace0e675eda3549232f812222",
+    "candidateSha256": "9e5175045c180558ac4a91093fa854daaccac6ef4888eb1c592b32909c1d3254"
+  }
+]

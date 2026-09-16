@@ -254,6 +254,8 @@ public final class WsMessages {
         private final double z;
         private final float yaw;
         private final float pitch;
+        /** 서버 권위 웅크림 상태. 서 있을 때도 false를 보내 원격 자세를 복원한다. */
+        private final boolean crouching;
         // 화상 여부(§11.5). welcome.players[]·playerMoves.players[] 에 실려 타 플레이어 3인칭 불꽃에 쓰인다.
         private final boolean onFire;
         /** 서버 권위 선택 슬롯의 아이템 ID. 빈손은 0입니다. */
@@ -375,6 +377,23 @@ public final class WsMessages {
                 List<BannerPatternLayer> offhandItemBannerPatterns, Boolean spearUsing,
                 List<com.gameexpert.engine.inventory.ItemComponentData.PotDecoration> selectedItemPotDecorations,
                 List<com.gameexpert.engine.inventory.ItemComponentData.PotDecoration> offhandItemPotDecorations) {
+            this(nickname, x, y, z, yaw, pitch, onFire, selectedItemId, offhandItemId,
+                    selectedItemEnchantments, offhandItemEnchantments, arrowCount, armorItemIds,
+                    armorTrims, armorEnchantments, armorLeatherColors, selectedItemBannerPatterns,
+                    offhandItemBannerPatterns, spearUsing, selectedItemPotDecorations,
+                    offhandItemPotDecorations, false);
+        }
+
+        public PlayerPose(String nickname, double x, double y, double z, float yaw, float pitch,
+                boolean onFire, short selectedItemId, short offhandItemId,
+                Object selectedItemEnchantments, Object offhandItemEnchantments, Integer arrowCount,
+                List<Short> armorItemIds, List<TrimComponent> armorTrims, List<Object> armorEnchantments,
+                List<Integer> armorLeatherColors, List<BannerPatternLayer> selectedItemBannerPatterns,
+                List<BannerPatternLayer> offhandItemBannerPatterns, Boolean spearUsing,
+                List<com.gameexpert.engine.inventory.ItemComponentData.PotDecoration> selectedItemPotDecorations,
+                List<com.gameexpert.engine.inventory.ItemComponentData.PotDecoration> offhandItemPotDecorations,
+                boolean crouching) {
+            this.crouching = crouching;
             this.selectedItemPotDecorations = selectedItemPotDecorations == null || selectedItemPotDecorations.isEmpty() ? null : List.copyOf(selectedItemPotDecorations);
             this.offhandItemPotDecorations = offhandItemPotDecorations == null || offhandItemPotDecorations.isEmpty() ? null : List.copyOf(offhandItemPotDecorations);
             this.nickname = nickname;

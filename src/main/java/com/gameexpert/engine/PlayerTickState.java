@@ -476,7 +476,7 @@ public final class PlayerTickState {
                 handBannerPatterns(PlayerInventory.Hand.MAIN),
                 handBannerPatterns(PlayerInventory.Hand.OFFHAND), spearUsing ? Boolean.TRUE : null,
                 inventory.stack(PlayerInventory.Hand.MAIN).itemComponents().potDecorations(),
-                inventory.stack(PlayerInventory.Hand.OFFHAND).itemComponents().potDecorations());
+                inventory.stack(PlayerInventory.Hand.OFFHAND).itemComponents().potDecorations(), crouching);
     }
 
     /**
