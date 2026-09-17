@@ -11423,6 +11423,11 @@ public final class WorldRuntime {
             operation.reject();
             throw failure;
         }
+        if (!ensureBlockCheckpointBeforeSettlement(spawnBatch != null)) {
+            operation.audit("submit-refused", "block-checkpoint");
+            completeGroundSettlement(command.committedGroundRevision(), false);
+            return false;
+        }
         PersistenceExecutor persistence = ctx.persistenceExecutor();
         if (persistence == null) {
             operation.audit("submit-accepted", "inline");
@@ -11486,6 +11491,22 @@ public final class WorldRuntime {
         }
         operation.audit("submit-accepted", "async");
         return true;
+    }
+
+    /**
+     * Orders the durable block change ahead of the settlement that credits its items. Without this
+     * boundary an owner crash between the two writes restores a mined block whose drop was already
+     * committed, which duplicates the item.
+     */
+    private boolean ensureBlockCheckpointBeforeSettlement(boolean mayWait) {
+        com.gameexpert.block.persistence.BlockDiffBuffer buffer = ctx.blockDiffBuffer();
+        if (buffer == null || !buffer.hasPending(worldId)) return true;
+        if (tickLoop.submitBlockCheckpointForSettlement()) return true;
+        if (!mayWait) return false;
+        // The spawn boundary already waits for writer tasks elsewhere; the in-flight checkpoint
+        // completes there and this retry then submits the newer cells.
+        awaitGroundWriterTasks();
+        return tickLoop.submitBlockCheckpointForSettlement();
     }
 
     synchronized long completeGroundSettlement(long committedRevision, boolean committed) {

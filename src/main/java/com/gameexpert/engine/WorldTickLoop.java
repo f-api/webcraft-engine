@@ -1359,6 +1359,7 @@ public final class WorldTickLoop {
             applyQueuedActions(rt.tickNo(), null);
             if (!rt.ownerTurnMayContinue()) return;
             broadcastBlocks();
+            drainPlayerEditCheckpoint();
             broadcastFireState();
             broadcastSoundEvents();
             broadcastHealth();
@@ -1577,6 +1578,7 @@ public final class WorldTickLoop {
             updateSelectedMaps(tickNo);
             broadcastMoves();
             broadcastBlocks();
+            drainPlayerEditCheckpoint();
             broadcastFireState();
             broadcastSoundEvents();
             broadcastHealth();
@@ -3275,6 +3277,9 @@ public final class WorldTickLoop {
         if (player == null) {
             return;
         }
+        // The edit's own cells must reach the writer in this tick: its inventory and drop
+        // settlements are durable immediately, so a 5s block cadence would outlive them.
+        playerEditCheckpointPending = true;
         TerrainAccessor accessor = rt.accessor();
         int current = residentBlockType(accessor, edit.x(), edit.y(), edit.z());
         if (current == UNAVAILABLE_BLOCK) return;
@@ -6467,8 +6472,37 @@ public final class WorldTickLoop {
         return primedTntCheckpointInFlight || runtimeFallCheckpointRetry != null || primedTnt.hasPendingPersistence();
     }
 
+    /** A player edit changed cells that are buffered but not yet queued for the writer. */
+    private boolean playerEditCheckpointPending;
+
+    /** Queues a player edit's block diff in the tick that produced it instead of on the 5s cadence. */
+    private void drainPlayerEditCheckpoint() {
+        if (!playerEditCheckpointPending) return;
+        if (submitBlockCheckpointForSettlement()) playerEditCheckpointPending = false;
+    }
+
     boolean usesCombinedBlockTntCheckpoint() {
         return primedTnt.persistenceService() != null;
+    }
+
+    /**
+     * Submits the buffered block diffs so a ground/inventory settlement can never become durable
+     * before the block change that produced its items. The single FIFO writer keeps that order.
+     * Returns false when an in-flight checkpoint already took its snapshot before these cells.
+     */
+    boolean submitBlockCheckpointForSettlement() {
+        com.gameexpert.block.persistence.BlockDiffBuffer buffer = rt.ctx().blockDiffBuffer();
+        if (buffer == null || !buffer.hasPending(rt.worldId())) return true;
+        if (usesCombinedBlockTntCheckpoint()) {
+            if (primedTntCheckpointInFlight) return false;
+            flushPrimedTnt();
+            // A refused submission restores the drained cells, so the buffer still reports pending.
+            return !buffer.hasPending(rt.worldId());
+        }
+        com.gameexpert.block.persistence.BlockDiffFlusher flusher = rt.ctx().blockDiffFlusher();
+        if (flusher == null) return true;
+        flusher.flushWorldAsync(rt.worldId());
+        return true;
     }
 
     /** 채굴과 폭발이 공유하는 상자 내용물 드랍 경로. */
