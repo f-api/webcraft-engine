@@ -680,6 +680,11 @@ public final class WorldTickLoop {
     private static final long DEFERRED_CONTAINER_EDIT_TICKS = 200L;
     /** 정산 창에 걸린 편집을 즉시 거절하는 대신 순서대로 담아 두는 FIFO. */
     private final ArrayDeque<DeferredContainerEdit> deferredContainerEdits = new ArrayDeque<>();
+    /** 아직 상주하지 않은 청크의 편집을 담아 두는 FIFO(입장·담당권 인계 직후의 첫 클릭). */
+    private final ArrayDeque<DeferredContainerEdit> deferredUnloadedEdits = new ArrayDeque<>();
+    /** 상주를 기다리는 편집의 최대 개수와 수명(10 TPS 기준 약 10초). */
+    private static final int MAX_DEFERRED_UNLOADED_EDITS = 64;
+    private static final long DEFERRED_UNLOADED_EDIT_TICKS = 100L;
     /** 보류분을 재적용하는 동안에는 같은 편집을 다시 담지 않는다(중복 적용·무한 재큐 방지). */
     private boolean replayingDeferredContainerEdits;
     /**
@@ -1317,6 +1322,7 @@ public final class WorldTickLoop {
         ActionFailureLog failures = new ActionFailureLog();
         // 컨테이너 정산 창에 걸려 보류된 편집을 이번 틱의 새 액션보다 먼저 되살린다.
         replayDeferredContainerEdits(tickNo, failures);
+        replayUnloadedChunkEdits(tickNo, failures);
         for (PlayerAction action : drained.orderedActions()) {
             try {
                 if (action instanceof PlayerAction.Move move) applyMove(move, tickNo);
@@ -3220,6 +3226,38 @@ public final class WorldTickLoop {
     }
 
     /**
+     * 청크가 상주하기 전에 도착한 편집을 담아 둔다. 클라이언트는 이미 낙관 반영을 그렸는데 이
+     * 셀에는 되돌릴 오버레이 항목이 없어, 조용히 버리면 서버가 절대 지우지 못하는 유령 블록이
+     * 남는다. 상주 즉시 같은 검증으로 다시 태우고, 끝내 상주하지 않으면 그대로 버린다.
+     */
+    private void deferEditUntilChunkLoads(PlayerTickState player, PlayerAction.BlockEdit edit) {
+        if (deferredUnloadedEdits.size() >= MAX_DEFERRED_UNLOADED_EDITS) return;
+        deferredUnloadedEdits.addLast(new DeferredContainerEdit(edit,
+                rt.tickNo() + DEFERRED_UNLOADED_EDIT_TICKS, editMainSlot(player)));
+    }
+
+    /** 상주한 셀의 보류 편집만 다시 태우고, 나머지는 마감까지 순서대로 남긴다. */
+    private void replayUnloadedChunkEdits(long tickNo, ActionFailureLog failures) {
+        for (int remaining = deferredUnloadedEdits.size(); remaining > 0; remaining--) {
+            DeferredContainerEdit head = deferredUnloadedEdits.pollFirst();
+            if (tickNo >= head.deadlineTick()) continue;
+            PlayerAction.BlockEdit edit = head.edit();
+            if (residentBlockType(rt.accessor(), edit.x(), edit.y(), edit.z()) == UNAVAILABLE_BLOCK) {
+                deferredUnloadedEdits.addLast(head);
+                continue;
+            }
+            try {
+                replayingDeferredEditMainSlot = head.mainSlot();
+                applyEdit(edit);
+            } catch (Exception exception) {
+                failures.record(edit, exception);
+            } finally {
+                replayingDeferredEditMainSlot = -1;
+            }
+        }
+    }
+
+    /**
      * 보류 큐에 담는다. 재적용 중이거나 큐가 가득 찼으면 담지 않고 호출자가 예전 계약대로 되돌린다.
      */
     private boolean deferEditUntilSettlementCloses(
@@ -3282,7 +3320,10 @@ public final class WorldTickLoop {
         playerEditCheckpointPending = true;
         TerrainAccessor accessor = rt.accessor();
         int current = residentBlockType(accessor, edit.x(), edit.y(), edit.z());
-        if (current == UNAVAILABLE_BLOCK) return;
+        if (current == UNAVAILABLE_BLOCK) {
+            deferEditUntilChunkLoads(player, edit);
+            return;
+        }
         if (rt.runtimeFallingSpeleothems().protectsCell(edit.x(), edit.y(), edit.z())) {
             if (deferEditUntilSettlementCloses(player, edit)) return;
             rollbackEdit(player, edit, current);
