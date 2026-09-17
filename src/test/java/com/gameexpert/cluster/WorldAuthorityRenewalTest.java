@@ -27,6 +27,9 @@ class WorldAuthorityRenewalTest {
             assertTrue(fixture.authority.accepts(fixture.owner));
             assertTrue(fixture.authority.retiredRoots().isEmpty());
             verify(fixture.statement, times(2)).setLong(3, 7L);
+            verify(fixture.connection, times(2)).prepareStatement(
+                    "UPDATE webcraft_world_lease SET expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6))"
+                            + " WHERE world_id=? AND node_id=? AND epoch=? AND expires_at>UTC_TIMESTAMP(6)");
         }
     }
 

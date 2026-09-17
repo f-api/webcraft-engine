@@ -106,34 +106,70 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
             if (System.nanoTime() < known.deadline()) return known.owner();
             retire(root); throw new IllegalStateException("WORLD_AUTHORITY_EXPIRED");
         }
-        long started = System.nanoTime();
         try (Connection c = dataSource.getConnection()) {
+            // Ordinary routing does not queue an exclusive fence lock behind game saves.
+            try (PreparedStatement q = c.prepareStatement("SELECT node_id,epoch,"
+                    + "TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),expires_at)"
+                    + " FROM webcraft_world_lease WHERE world_id=?")) {
+                q.setLong(1, root);
+                try (ResultSet rows = q.executeQuery()) {
+                    if (rows.next() && rows.getLong(3) > 0
+                            && !ClusterIdentity.NODE.equals(rows.getString(1))) {
+                        return new Owner(root, rows.getString(1), rows.getLong(2));
+                    }
+                }
+            }
             c.setAutoCommit(false);
             try {
                 try (PreparedStatement q = c.prepareStatement("INSERT INTO webcraft_world_authority"
                         + "(world_id,node_id,epoch,expires_at) VALUES (?, '', 0, '1970-01-01') ON DUPLICATE KEY UPDATE world_id=world_id")) {
                     q.setLong(1, root); q.executeUpdate();
                 }
-                Owner owner;
-                long remainingMicros;
-                try (PreparedStatement q = c.prepareStatement("SELECT node_id,epoch,"
-                        + "TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),expires_at)"
-                        + " FROM webcraft_world_authority WHERE world_id=? FOR UPDATE")) {
+                // Takeover waits for every admitted writer BEFORE locking/rechecking the lease.
+                // Renewal touches only the lease, so a waiting takeover cannot stop heartbeats.
+                Owner fenced;
+                try (PreparedStatement q = c.prepareStatement(
+                        "SELECT node_id,epoch FROM webcraft_world_authority WHERE world_id=? FOR UPDATE")) {
                     q.setLong(1, root);
                     try (ResultSet rows = q.executeQuery()) {
-                        if (!rows.next()) throw new SQLException("Missing ownership row");
+                        if (!rows.next()) throw new SQLException("Missing ownership fence");
+                        fenced = new Owner(root, rows.getString(1), rows.getLong(2));
+                    }
+                }
+                try (PreparedStatement q = c.prepareStatement("INSERT IGNORE INTO webcraft_world_lease"
+                        + "(world_id,node_id,epoch,expires_at) SELECT world_id,node_id,epoch,expires_at"
+                        + " FROM webcraft_world_authority WHERE world_id=?")) {
+                    q.setLong(1, root);
+                    q.executeUpdate();
+                }
+                Owner owner;
+                long remainingMicros;
+                long leaseObservedAt = System.nanoTime();
+                try (PreparedStatement q = c.prepareStatement("SELECT node_id,epoch,"
+                        + "TIMESTAMPDIFF(MICROSECOND,UTC_TIMESTAMP(6),expires_at)"
+                        + " FROM webcraft_world_lease WHERE world_id=? FOR UPDATE")) {
+                    q.setLong(1, root);
+                    try (ResultSet rows = q.executeQuery()) {
+                        if (!rows.next()) throw new SQLException("Missing ownership lease");
                         owner = new Owner(root, rows.getString(1), rows.getLong(2));
                         remainingMicros = rows.getLong(3);
                     }
                 }
+                if (!fenced.equals(owner)) throw new SQLException("World lease and fence disagree");
                 if (remainingMicros <= 0) {
                     if (retired.contains(root) || ClusterIdentity.NODE.equals(owner.node())) {
                         retire(root); throw new SQLException("Expired incarnation cannot reacquire a live cache");
                     }
                     owner = new Owner(root, ClusterIdentity.NODE, Math.addExact(owner.epoch(), 1));
                     try (PreparedStatement q = c.prepareStatement("UPDATE webcraft_world_authority SET"
-                            + " node_id=?,epoch=?,expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6)) WHERE world_id=?")) {
+                            + " node_id=?,epoch=? WHERE world_id=?")) {
                         q.setString(1, owner.node()); q.setLong(2, owner.epoch()); q.setLong(3, root); q.executeUpdate();
+                    }
+                    try (PreparedStatement q = c.prepareStatement("UPDATE webcraft_world_lease SET"
+                            + " node_id=?,epoch=?,expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6)) WHERE world_id=?")) {
+                        q.setString(1, owner.node()); q.setLong(2, owner.epoch()); q.setLong(3, root);
+                        leaseObservedAt = System.nanoTime();
+                        q.executeUpdate();
                     }
                     remainingMicros = 15_000_000;
                 }
@@ -141,10 +177,10 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                 if (ClusterIdentity.NODE.equals(owner.node())) {
                     long safeNanos = Math.min(LOCAL_NANOS, remainingMicros * 1000 - Duration.ofSeconds(3).toNanos());
                     if (closed || retired.contains(root) || safeNanos <= 0
-                            || System.nanoTime() - started >= safeNanos) {
+                            || System.nanoTime() - leaseObservedAt >= safeNanos) {
                         retire(root); throw new SQLException("Ownership acquisition exceeded safe deadline");
                     }
-                    held.putIfAbsent(root, new Held(owner, started + safeNanos));
+                    held.putIfAbsent(root, new Held(owner, leaseObservedAt + safeNanos));
                     log.info("World authority acquired: root={} node={} epoch={}", root, owner.node(), owner.epoch());
                 }
                 return owner;
@@ -192,7 +228,7 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
             if (!mayRenew(root, prior, started)) { retire(root); return; }
             SQLException rolledBack = null;
             try (Connection c = dataSource.getConnection(); PreparedStatement q = c.prepareStatement(
-                    "UPDATE webcraft_world_authority SET expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6))"
+                    "UPDATE webcraft_world_lease SET expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6))"
                             + " WHERE world_id=? AND node_id=? AND epoch=? AND expires_at>UTC_TIMESTAMP(6)")) {
                 q.setQueryTimeout(3);
                 q.setLong(1, root);
@@ -233,7 +269,7 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                 && now < prior.deadline();
     }
     private void retire(long root) {
-        if (retired.add(root)) log.error("World authority retired: root={} node={}; MySQL rejects late writes",
+        if (retired.add(root)) log.error("World authority retired: root={} node={}; runtime stopped, takeover fences prior writers",
                 root, ClusterIdentity.NODE);
         held.remove(root);
     }

@@ -19,6 +19,11 @@ public final class FencedDataSourcePostProcessor implements BeanPostProcessor, A
             Connection connection = source.getConnection();
             try {
                 if (!connection.getMetaData().getDatabaseProductName().equalsIgnoreCase("MySQL")) { connection.close(); return; }
+                try (java.sql.PreparedStatement tag = connection.prepareStatement(
+                        "SET @webcraft_node = ?, @webcraft_fence_protocol = 2")) {
+                    tag.setString(1, ClusterIdentity.NODE);
+                    tag.execute();
+                }
                 String lock = "webcraft:schema:" + SqlWriteFences.digest(connection.getCatalog()).substring(0, 32);
                 try (java.sql.PreparedStatement statement = connection.prepareStatement("SELECT GET_LOCK(?,180)")) {
                     statement.setString(1, lock);
@@ -59,7 +64,7 @@ public final class FencedDataSourcePostProcessor implements BeanPostProcessor, A
         private Connection tag(Connection connection) throws SQLException {
             try {
                 if (connection.getMetaData().getDatabaseProductName().equalsIgnoreCase("MySQL")) {
-                    try (java.sql.PreparedStatement statement = connection.prepareStatement("SET @webcraft_node = ?")) {
+                    try (java.sql.PreparedStatement statement = connection.prepareStatement("SET @webcraft_node = ?, @webcraft_fence_protocol = 2")) {
                         statement.setString(1, ClusterIdentity.NODE);
                         statement.execute();
                     }

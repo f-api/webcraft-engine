@@ -37,6 +37,7 @@ final class SqlWriteFences {
                 s.execute("CREATE TABLE IF NOT EXISTS webcraft_world_authority (world_id BIGINT NOT NULL PRIMARY KEY,"
                         + "node_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,expires_at DATETIME(6) NOT NULL) ENGINE=InnoDB");
             }
+            prepareLeaseProtocol(c);
             Map<String, Set<String>> columns = new TreeMap<>();
             try (PreparedStatement q = c.prepareStatement("SELECT TABLE_NAME,COLUMN_NAME FROM information_schema.COLUMNS"
                     + " WHERE TABLE_SCHEMA=DATABASE()"); ResultSet r = q.executeQuery()) {
@@ -58,7 +59,7 @@ final class SqlWriteFences {
             }
             Map<String, String> paths = new TreeMap<>();
             Set<String> student = Set.of("world", "worlds", "player", "players", "chat_message", "chat_messages",
-                    "webcraft_world_authority");
+                    "webcraft_world_authority", "webcraft_world_lease");
             for (Map.Entry<String, Set<String>> e : columns.entrySet()) {
                 if (student.contains(e.getKey())) continue;
                 if (e.getValue().contains("world_id")) paths.put(e.getKey(), "$row.world_id");
@@ -104,39 +105,155 @@ final class SqlWriteFences {
             }
         }
     }
+    private static void prepareLeaseProtocol(Connection c) throws SQLException {
+        boolean leaseExists;
+        try (PreparedStatement q = c.prepareStatement("SELECT COUNT(*) FROM information_schema.TABLES"
+                + " WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='webcraft_world_lease'");
+                ResultSet rows = q.executeQuery()) {
+            rows.next(); leaseExists = rows.getInt(1) != 0;
+        }
+        boolean legacy = !leaseExists;
+        try (PreparedStatement q = c.prepareStatement("SELECT COUNT(*) FROM information_schema.TRIGGERS"
+                + " WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME LIKE 'wc_fence_v1_%'"
+                + " AND ACTION_STATEMENT LIKE '%fence_until<=UTC_TIMESTAMP(6)%'");
+                ResultSet rows = q.executeQuery()) {
+            rows.next(); legacy |= rows.getInt(1) != 0;
+        }
+        if (legacy) requireExpiredLeases(c, "webcraft_world_authority");
+        if (legacy && leaseExists) requireExpiredLeases(c, "webcraft_world_lease");
+        // Old processes cannot acquire/renew the now-stable fence, even if they were idle
+        // during upgrade. The connection marker is supplied by this engine, not student config.
+        for (String event : List.of("INSERT", "UPDATE", "DELETE")) {
+            String name = "wc_authority_protocol_v2_" + event.toLowerCase(Locale.ROOT);
+            String body = "BEGIN IF COALESCE(@webcraft_fence_protocol,0)<>2 THEN "
+                    + "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='WEBCRAFT_FENCE_PROTOCOL_REQUIRED'; END IF; END";
+            ensureTrigger(c, name, "webcraft_world_authority", event, body);
+        }
+        try (Statement statement = c.createStatement()) {
+            statement.execute("CREATE TABLE IF NOT EXISTS webcraft_world_lease (world_id BIGINT NOT NULL PRIMARY KEY,"
+                    + "node_id VARCHAR(36) NOT NULL,epoch BIGINT NOT NULL,expires_at DATETIME(6) NOT NULL) ENGINE=InnoDB");
+        }
+        if (legacy) {
+            c.setAutoCommit(false);
+            try {
+                // Drain admitted legacy writers and recheck races with the first quiescence check.
+                try (Statement q = c.createStatement(); ResultSet rows = q.executeQuery(
+                        "SELECT world_id, node_id, expires_at>UTC_TIMESTAMP(6) FROM webcraft_world_authority FOR UPDATE")) {
+                    while (rows.next()) {
+                        if (!rows.getString(2).isEmpty() && rows.getBoolean(3)) throw activeLegacyLease();
+                    }
+                }
+                copyMissingLeases(c);
+                c.commit();
+            } catch (SQLException failure) {
+                c.rollback(); throw failure;
+            } finally { c.setAutoCommit(true); }
+        } else {
+            copyMissingLeases(c);
+        }
+    }
+
+    private static void requireExpiredLeases(Connection c, String table) throws SQLException {
+        try (Statement q = c.createStatement(); ResultSet rows = q.executeQuery(
+                "SELECT COUNT(*) FROM " + table + " WHERE node_id<>'' AND expires_at>UTC_TIMESTAMP(6)")) {
+            rows.next(); if (rows.getLong(1) != 0) throw activeLegacyLease();
+        }
+    }
+
+    private static SQLException activeLegacyLease() {
+        return new SQLException("Active legacy world leases prevent fence migration; stop all application nodes and retry");
+    }
+
+    private static void copyMissingLeases(Connection c) throws SQLException {
+        try (Statement statement = c.createStatement()) {
+            statement.executeUpdate("INSERT IGNORE INTO webcraft_world_lease(world_id,node_id,epoch,expires_at)"
+                    + " SELECT world_id,node_id,epoch,expires_at FROM webcraft_world_authority");
+        }
+    }
+
     private static boolean installTrigger(Connection c, String table, String expression, String event) throws SQLException {
         String name = "wc_fence_v1_" + digest(table + ":" + event).substring(0, 20);
-        String guards = event.equals("UPDATE") ? guard(expression, "OLD") + guard(expression, "NEW")
-                : guard(expression, event.equals("DELETE") ? "OLD" : "NEW");
-        String body = "BEGIN DECLARE fence_world BIGINT; DECLARE fence_owner VARCHAR(36); "
+        String body = triggerBody(expression, event, false);
+        String existing = triggerBody(c, name);
+        if (existing == null) {
+            ensureTrigger(c, name, table, event, body);
+            dropTemporaryGuard(c, table, event, body);
+            return true;
+        }
+        if (body.trim().equals(existing.trim())) {
+            dropTemporaryGuard(c, table, event, body);
+            return false;
+        }
+        if (!triggerBody(expression, event, true).trim().equals(existing.trim())) {
+            throw new SQLException("Different existing world write fence: " + name + "; do not replace an unknown fence");
+        }
+        // Never leave a writable table uncovered while DDL autocommits each migration step.
+        String temporary = temporaryGuardName(table, event);
+        ensureTrigger(c, temporary, table, event, body);
+        try (Statement statement = c.createStatement()) { statement.execute("DROP TRIGGER `" + name + "`"); }
+        ensureTrigger(c, name, table, event, body);
+        dropTemporaryGuard(c, table, event, body);
+        return true;
+    }
+
+    private static String triggerBody(String expression, String event, boolean legacy) {
+        String guards = event.equals("UPDATE")
+                ? guard(expression, "OLD", legacy) + guard(expression, "NEW", legacy)
+                : guard(expression, event.equals("DELETE") ? "OLD" : "NEW", legacy);
+        return "BEGIN DECLARE fence_world BIGINT; DECLARE fence_owner VARCHAR(36); "
                 + "DECLARE fence_until DATETIME(6); " + guards + "END";
+    }
+
+    private static String triggerBody(Connection c, String name) throws SQLException {
         try (PreparedStatement q = c.prepareStatement("SELECT ACTION_STATEMENT FROM information_schema.TRIGGERS"
                 + " WHERE TRIGGER_SCHEMA=DATABASE() AND TRIGGER_NAME=?")) {
             q.setString(1, name);
-            try (ResultSet r = q.executeQuery()) {
-                if (r.next()) {
-                    if (!body.trim().equals(r.getString(1).trim())) {
-                        throw new SQLException("Different existing world write fence: " + name + "; do not replace a live fence");
-                    }
-                    return false;
-                }
-            }
+            try (ResultSet rows = q.executeQuery()) { return rows.next() ? rows.getString(1) : null; }
         }
-        try (Statement s = c.createStatement()) {
-            s.execute("CREATE TRIGGER `" + name + "` BEFORE " + event + " ON `" + identifier(table)
+    }
+
+    private static void ensureTrigger(Connection c, String name, String table, String event, String body) throws SQLException {
+        String existing = triggerBody(c, name);
+        if (existing != null) {
+            if (!body.trim().equals(existing.trim())) throw new SQLException("Different existing world write fence: " + name);
+            return;
+        }
+        try (Statement statement = c.createStatement()) {
+            statement.execute("CREATE TRIGGER `" + name + "` BEFORE " + event + " ON `" + identifier(table)
                     + "` FOR EACH ROW " + body);
         }
-        return true;
     }
-    static String guard(String expression, String row) {
-        // Read-only shared fences permit parallel saves while takeover waits for all prior writes.
-        return "SET fence_world=" + expression.replace("$row", row) + "; "
+
+    private static String temporaryGuardName(String table, String event) {
+        return "wc_fence_upgrade_v2_" + digest(table + ":" + event).substring(0, 20);
+    }
+
+    private static void dropTemporaryGuard(Connection c, String table, String event, String body) throws SQLException {
+        String name = temporaryGuardName(table, event);
+        String existing = triggerBody(c, name);
+        if (existing == null) return;
+        if (!body.trim().equals(existing.trim())) throw new SQLException("Different temporary world write fence: " + name);
+        try (Statement statement = c.createStatement()) { statement.execute("DROP TRIGGER `" + name + "`"); }
+    }
+
+    static String guard(String expression, String row) { return guard(expression, row, false); }
+
+    private static String guard(String expression, String row, boolean legacy) {
+        // Stable incarnation fencing is independent of heartbeat expiry. Takeover takes X,
+        // waits for admitted writes to commit, then changes the incarnation before loading state.
+        return (legacy ? "" : "IF COALESCE(@webcraft_fence_protocol,0)<>2 THEN "
+                    + "SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='WEBCRAFT_FENCE_PROTOCOL_REQUIRED'; END IF; ")
+                + "SET fence_world=" + expression.replace("$row", row) + "; "
                 + "SET fence_world=COALESCE((SELECT root_world_id FROM world_dimensions WHERE child_world_id=fence_world),fence_world); "
                 + "IF fence_world IS NOT NULL THEN "
                 + "SET fence_owner=NULL; "
-                + "SELECT node_id,expires_at INTO fence_owner,fence_until FROM webcraft_world_authority WHERE world_id=fence_world FOR SHARE; "
+                + (legacy
+                    ? "SELECT node_id,expires_at INTO fence_owner,fence_until FROM webcraft_world_authority WHERE world_id=fence_world FOR SHARE; "
+                    : "SELECT node_id INTO fence_owner FROM webcraft_world_authority WHERE world_id=fence_world FOR SHARE; ")
                 + "IF fence_owner IS NULL THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='WEBCRAFT_MISSING_WORLD_AUTHORITY'; END IF; "
-                + "IF fence_owner<>'' AND (BINARY fence_owner<>BINARY COALESCE(@webcraft_node,'') OR fence_until<=UTC_TIMESTAMP(6)) "
+                + (legacy
+                    ? "IF fence_owner<>'' AND (BINARY fence_owner<>BINARY COALESCE(@webcraft_node,'') OR fence_until<=UTC_TIMESTAMP(6)) "
+                    : "IF fence_owner<>'' AND BINARY fence_owner<>BINARY COALESCE(@webcraft_node,'') ")
                 + "THEN SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='WEBCRAFT_STALE_WORLD_AUTHORITY'; END IF; END IF; ";
     }
     private static String identifier(String value) {
