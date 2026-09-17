@@ -21,6 +21,7 @@ import org.springframework.stereotype.Component;
 public final class WorldAuthority implements SmartInitializingSingleton, AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(WorldAuthority.class);
     private static final long LOCAL_NANOS = Duration.ofSeconds(12).toNanos();
+    private static final int RENEWAL_ATTEMPTS = 3;
     @lombok.Value
     @lombok.experimental.Accessors(fluent = true)
     public static class Owner {
@@ -99,6 +100,7 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
         if (!enabled) return new Owner(world, ClusterIdentity.NODE, 0);
         long root = rootFor(world);
         if (closed) throw new IllegalStateException("WORLD_AUTHORITY_CLOSED");
+        if (retired.contains(root)) throw new IllegalStateException("WORLD_AUTHORITY_RETIRED");
         Held known = held.get(root);
         if (known != null) {
             if (System.nanoTime() < known.deadline()) return known.owner();
@@ -138,7 +140,8 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                 c.commit();
                 if (ClusterIdentity.NODE.equals(owner.node())) {
                     long safeNanos = Math.min(LOCAL_NANOS, remainingMicros * 1000 - Duration.ofSeconds(3).toNanos());
-                    if (safeNanos <= 0 || System.nanoTime() - started >= safeNanos) {
+                    if (closed || retired.contains(root) || safeNanos <= 0
+                            || System.nanoTime() - started >= safeNanos) {
                         retire(root); throw new SQLException("Ownership acquisition exceeded safe deadline");
                     }
                     held.putIfAbsent(root, new Held(owner, started + safeNanos));
@@ -179,19 +182,55 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
     }
     private void renew() {
         for (Map.Entry<Long, Held> entry : held.entrySet()) {
-            long root = entry.getKey(); Held prior = entry.getValue(); long started = System.nanoTime();
-            if (retired.contains(root) || started >= prior.deadline()) { retire(root); continue; }
+            renew(entry.getKey(), entry.getValue());
+        }
+    }
+
+    private void renew(long root, Held prior) {
+        for (int attempt = 1; attempt <= RENEWAL_ATTEMPTS; attempt++) {
+            long started = System.nanoTime();
+            if (!mayRenew(root, prior, started)) { retire(root); return; }
+            SQLException rolledBack = null;
             try (Connection c = dataSource.getConnection(); PreparedStatement q = c.prepareStatement(
                     "UPDATE webcraft_world_authority SET expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6))"
                             + " WHERE world_id=? AND node_id=? AND epoch=? AND expires_at>UTC_TIMESTAMP(6)")) {
-                q.setQueryTimeout(3); q.setLong(1, root); q.setString(2, ClusterIdentity.NODE); q.setLong(3, prior.owner().epoch());
-                if (q.executeUpdate() != 1 || System.nanoTime() >= prior.deadline()) { retire(root); continue; }
+                q.setQueryTimeout(3);
+                q.setLong(1, root);
+                q.setString(2, ClusterIdentity.NODE);
+                q.setLong(3, prior.owner().epoch());
+                int updated;
+                try {
+                    updated = q.executeUpdate();
+                } catch (SQLException failure) {
+                    // MySQL 1213 confirms rollback. Timeouts and connection errors do not.
+                    if (failure.getErrorCode() == 1213 && "40001".equals(failure.getSQLState())) {
+                        rolledBack = failure;
+                    }
+                    throw failure;
+                }
+                if (updated != 1 || !mayRenew(root, prior, System.nanoTime())) {
+                    retire(root);
+                    return;
+                }
                 held.replace(root, prior, new Held(prior.owner(), started + LOCAL_NANOS));
+                return;
             } catch (Exception failure) {
-                // An ambiguous renewal is terminal, not permission to revive a cached world.
-                log.warn("World lease renewal failed; fencing root {}", root, failure); retire(root);
+                // A retry never extends the previously confirmed local lease.
+                if (failure == rolledBack && failure.getSuppressed().length == 0
+                        && attempt < RENEWAL_ATTEMPTS
+                        && mayRenew(root, prior, System.nanoTime())) {
+                    continue;
+                }
+                log.warn("World lease renewal failed; fencing root {}", root, failure);
+                retire(root);
+                return;
             }
         }
+    }
+
+    private boolean mayRenew(long root, Held prior, long now) {
+        return !closed && !retired.contains(root) && held.get(root) == prior
+                && now < prior.deadline();
     }
     private void retire(long root) {
         if (retired.add(root)) log.error("World authority retired: root={} node={}; MySQL rejects late writes",

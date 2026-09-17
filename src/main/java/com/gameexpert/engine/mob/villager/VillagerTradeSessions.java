@@ -12,7 +12,6 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.IntUnaryOperator;
 
 import com.gameexpert.engine.inventory.PlayerInventory;
-import com.gameexpert.engine.ChestInventory;
 import com.gameexpert.engine.inventory.ContainerAccess;
 import com.gameexpert.engine.mob.villager.VillagerTradeState.Rejection;
 import com.gameexpert.engine.mob.villager.VillagerTradeState.TradeResult;
@@ -58,7 +57,7 @@ public final class VillagerTradeSessions {
     private final Map<Long, VillagerTradeState> states = new HashMap<>();
     private final Map<String, Long> openSessions = new LinkedHashMap<>();
     private final Map<String, Integer> selectedOffers = new HashMap<>();
-    private final Map<String, ChestInventory> payments = new HashMap<>();
+    private final Map<String, PlayerInventory> payments = new HashMap<>();
     private VillagerReputationSource reputations = VillagerReputationSource.NONE;
     /** 저장이 승인되지 않은 행. 직업 lane 과 같은 delta 계약이다. */
     private final Map<Long, VillagerTradeSnapshot> unpersistedUpserts = new ConcurrentHashMap<>();
@@ -112,13 +111,13 @@ public final class VillagerTradeSessions {
      */
     public TradeView open(
             String nickname, long mobId,
-            VillagerTradeRules.Profession profession, IntUnaryOperator nextInt) {
+            VillagerTradeRules.Profession profession, IntUnaryOperator nextInt, PlayerInventory inventory) {
         if (!VillagerTradeRules.tradesAtAll(profession)) return null;
         VillagerTradeState state = stateFor(mobId, profession, nextInt);
         if (state.offerCount() == 0) return null;
         openSessions.put(nickname, mobId);
         selectedOffers.put(nickname, -1);
-        payments.put(nickname, new ChestInventory(2));
+        payments.put(nickname, java.util.Objects.requireNonNull(inventory, "merchant inventory"));
         return view(mobId, state, reputations.reputationOf(mobId, nickname),
                 heroAmplifiers.applyAsInt(nickname));
     }
@@ -143,7 +142,7 @@ public final class VillagerTradeSessions {
     public void closeAllFor(long mobId) {
         openSessions.entrySet().removeIf(entry -> {
             if (entry.getValue() != mobId) return false;
-            ChestInventory held = payments.get(entry.getKey());
+            ContainerAccess held = paymentAccess(entry.getKey());
             // Keep a funded session reachable until the owner's automatic close returns it.
             if (held != null && (held.count(0) > 0 || held.count(1) > 0)) return false;
             selectedOffers.remove(entry.getKey());
@@ -166,59 +165,80 @@ public final class VillagerTradeSessions {
     }
 
     public ContainerAccess paymentAccess(String nickname) {
-        ChestInventory value = payments.get(nickname);
-        return value == null ? null : ContainerAccess.of(value);
+        PlayerInventory value = payments.get(nickname);
+        return value == null ? null : value.merchantPayments();
     }
 
     /** Existing inputs are folded first, then exact plain stacks are moved into the two payments. */
     public boolean selectAndFill(String nickname, long mobId, int offerIndex,
             PlayerInventory inventory) {
-        if (!select(nickname, mobId, offerIndex)) return false;
-        if (!foldPayments(nickname, inventory)) return false;
-        VillagerTradeState state = states.get(mobId);
-        VillagerTradeState.Slot slot = state.slots().get(offerIndex);
-        int reputation = reputations.reputationOf(mobId, nickname);
-        ChestInventory held = payments.computeIfAbsent(nickname, ignored -> new ChestInventory(2));
-        takeMatching(inventory, ContainerAccess.of(held), 0, slot.offer().costPrototype(),
-                slot.currentCostCount(discount(state,slot, reputation,
-                        heroAmplifiers.applyAsInt(nickname))));
-        if (slot.offer().hasSecondCost()) {
-            takeMatching(inventory, ContainerAccess.of(held), 1,
-                    slot.offer().costBPrototype(), slot.offer().costBCount());
-        }
-        return true;
+        if (!select(nickname, mobId, offerIndex) || payments.get(nickname) != inventory) return false;
+        return inventory.mutateMerchantPayments(() -> {
+            if (!foldPayments(nickname, inventory)) return false;
+            VillagerTradeState state = states.get(mobId);
+            VillagerTradeState.Slot slot = state.slots().get(offerIndex);
+            int reputation = reputations.reputationOf(mobId, nickname);
+            ContainerAccess held = paymentAccess(nickname);
+            takeMatching(inventory, held, 0, slot.offer().costPrototype(),
+                    slot.currentCostCount(discount(state, slot, reputation,
+                            heroAmplifiers.applyAsInt(nickname))));
+            if (slot.offer().hasSecondCost()) {
+                takeMatching(inventory, held, 1, slot.offer().costBPrototype(), slot.offer().costBCount());
+            }
+            return true;
+        });
     }
 
     public boolean foldPayments(String nickname, PlayerInventory inventory) {
-        ChestInventory held = payments.get(nickname);
+        ContainerAccess held = paymentAccess(nickname);
         if (held == null) return true;
-        boolean complete = true;
-        for (int slot = 0; slot < 2; slot++) {
-            if (held.itemType(slot) == 0 || held.count(slot) <= 0) continue;
-            int count = held.count(slot);
-            int inserted = inventory.addItem(held.itemType(slot), count, held.durability(slot),
-                    held.enchantments(slot), held.mapId(slot), held.shulkerId(slot),
-                    held.bucketMobData(slot), held.itemComponentData(slot));
-            held.take(slot, inserted);
-            if (inserted != count) complete = false;
-        }
-        return complete;
+        if (payments.get(nickname) != inventory) return false;
+        boolean[] complete = {true};
+        boolean accepted = inventory.mutateMerchantPayments(() -> {
+            for (int slot = 0; slot < 2; slot++) {
+                if (held.count(slot) == 0) continue;
+                PlayerInventory.StackSnapshot stack = paymentStack(held, slot);
+                held.take(slot, stack.count());
+                int inserted = inventory.addItem(stack.itemType(), stack.count(), stack.durability(),
+                        stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                        stack.bucketMobData(), stack.itemComponentData());
+                if (inserted != stack.count()) {
+                    held.put(slot, stack.itemType(), stack.count() - inserted, stack.durability(),
+                            stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                            stack.bucketMobData(), stack.itemComponentData());
+                    complete[0] = false;
+                }
+            }
+            return true;
+        });
+        return accepted && complete[0];
     }
 
     /** Closing returns what fits and exposes the remaining exact stacks for a ground drop. */
     public List<PlayerInventory.DroppedStack> returnPayments(String nickname, PlayerInventory inventory) {
-        foldPayments(nickname, inventory);
-        ChestInventory held = payments.get(nickname);
+        ContainerAccess held = paymentAccess(nickname);
         if (held == null) return List.of();
+        if (payments.get(nickname) != inventory) throw new IllegalStateException("merchant inventory changed");
         List<PlayerInventory.DroppedStack> overflow = new ArrayList<>();
-        for (int slot = 0; slot < 2; slot++) {
-            if (held.count(slot) <= 0) continue;
-            overflow.add(PlayerInventory.DroppedStack.exact(held.itemType(slot), held.count(slot),
-                    held.durability(slot), held.enchantments(slot), held.mapId(slot),
-                    held.shulkerId(slot), held.bucketMobData(slot), held.itemComponentData(slot)));
-            held.take(slot, held.count(slot));
-        }
-        return List.copyOf(overflow);
+        boolean accepted = inventory.mutateMerchantPayments(() -> {
+            foldPayments(nickname, inventory);
+            for (int slot = 0; slot < 2; slot++) {
+                if (held.count(slot) == 0) continue;
+                PlayerInventory.StackSnapshot stack = paymentStack(held, slot);
+                overflow.add(PlayerInventory.DroppedStack.exact(stack.itemType(), stack.count(),
+                        stack.durability(), stack.enchantments(), stack.mapId(), stack.shulkerId(),
+                        stack.bucketMobData(), stack.itemComponentData()));
+                held.take(slot, stack.count());
+            }
+            return true;
+        });
+        return accepted ? List.copyOf(overflow) : List.of();
+    }
+
+    private static PlayerInventory.StackSnapshot paymentStack(ContainerAccess held, int slot) {
+        return new PlayerInventory.StackSnapshot(held.itemType(slot), held.count(slot), held.durability(slot),
+                held.enchantments(slot), held.mapId(slot), held.shulkerId(slot),
+                held.bucketMobData(slot), held.itemComponentData(slot));
     }
 
     private static void takeMatching(PlayerInventory inventory, ContainerAccess held, int paymentSlot,

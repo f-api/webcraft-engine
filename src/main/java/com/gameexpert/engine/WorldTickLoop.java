@@ -7281,7 +7281,7 @@ public final class WorldTickLoop {
         }
         closeActiveMenuBeforeOpen(player);
         var view = villagerTrades.open(player.nickname(), mobId, profession,
-                com.gameexpert.engine.mob.villager.VillagerTradeRules.offerDraws(mobId, 1));
+                com.gameexpert.engine.mob.villager.VillagerTradeRules.offerDraws(mobId, 1), player.inventory());
         if (view == null) {
             rt.mobSystem().rejectVillagerTradeVisual(mobId);
             sendTo(player, new com.gameexpert.ws.dto.WsMessages.Error("VILLAGER_NOT_TRADING"));

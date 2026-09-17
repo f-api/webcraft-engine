@@ -564,6 +564,8 @@ public final class PlayerInventory {
         private final String snapshotDigest;
         private final String sourceLineageDigest;
 
+        private final StackSnapshot[] merchantPayments;
+
         private final PersistenceSnapshot persistenceSnapshot;
 
         private CompletePersistenceSnapshot(PlayerInventory inventory, InventoryArrays normalized) {
@@ -572,6 +574,7 @@ public final class PlayerInventory {
 
         private CompletePersistenceSnapshot(PlayerInventory inventory, InventoryArrays normalized,
                 long leaseNonce) {
+            merchantPayments = inventory.merchantPaymentSnapshot();
             itemTypes = inventory.itemType.clone();
             counts = inventory.count.clone();
             durabilities = inventory.durability.clone();
@@ -696,6 +699,7 @@ public final class PlayerInventory {
             inventory.craftingSlotCount = craftingSlotCount;
             inventory.craftingStonecutter = craftingStonecutter;
             inventory.craftingSelection = craftingSelection;
+            inventory.restoreMerchantPayments(merchantPayments);
             inventory.persistenceLineageDigest = sourceLineageDigest;
             return inventory;
         }
@@ -735,6 +739,7 @@ public final class PlayerInventory {
         digest.intValue(source.craftingSlotCount);
         digest.booleanValue(source.craftingStonecutter);
         digest.stringValue(source.craftingSelection);
+        for (StackSnapshot payment : source.merchantPayments) appendStack(digest, payment);
         return digest.finish();
     }
 
@@ -1993,6 +1998,177 @@ public final class PlayerInventory {
     }
 
     /** 기본 인벤토리: 슬롯 0 에 검 1개(내구 60), 나머지 비어 있음, 선택 슬롯 0. */
+    private com.gameexpert.engine.ChestInventory merchantPayments = new com.gameexpert.engine.ChestInventory(2);
+    private final ContainerAccess merchantPaymentAccess = new MerchantPaymentAccess();
+    private boolean merchantMutationInProgress;
+
+    public synchronized ContainerAccess merchantPayments() {
+        return merchantPaymentAccess;
+    }
+
+    private StackSnapshot[] merchantPaymentSnapshot() {
+        return java.util.stream.IntStream.range(0, 2).mapToObj(slot ->
+                merchantPayments.count(slot) == 0 ? StackSnapshot.EMPTY : new StackSnapshot(
+                        merchantPayments.itemType(slot), merchantPayments.count(slot),
+                        merchantPayments.durability(slot), merchantPayments.enchantments(slot),
+                        merchantPayments.mapId(slot), merchantPayments.shulkerId(slot),
+                        merchantPayments.bucketMobData(slot), merchantPayments.itemComponentData(slot)))
+                .toArray(StackSnapshot[]::new);
+    }
+
+    private void restoreMerchantPayments(StackSnapshot[] stacks) {
+        merchantPayments = new com.gameexpert.engine.ChestInventory(2);
+        ContainerAccess target = ContainerAccess.of(merchantPayments);
+        for (int slot = 0; slot < 2; slot++) {
+            StackSnapshot stack = stacks[slot];
+            if (stack.isEmpty()) continue;
+            target.put(slot, stack.itemType(), stack.count(), stack.durability(), stack.enchantments(),
+                    stack.mapId(), stack.shulkerId(), stack.bucketMobData(), stack.itemComponentData());
+        }
+    }
+
+    /** A merchant transfer changes visible slots and the private payment slots as one mutation. */
+    public synchronized boolean mutateMerchantPayments(java.util.function.BooleanSupplier mutation) {
+        if (settlementMutationBlocked()) return false;
+        if (merchantMutationInProgress) return mutation.getAsBoolean();
+        preflightRevisionCapacity();
+        TransientMutationSnapshot before = new TransientMutationSnapshot(this);
+        long beforeRevision = revision;
+        long beforeHandNonce = handMutationNonce;
+        boolean beforeBound = persistenceRevisionBound;
+        PersistenceLifecycle beforeLifecycle = persistenceLifecycle;
+        merchantMutationInProgress = true;
+        try {
+            boolean changed = mutation.getAsBoolean();
+            merchantMutationInProgress = false;
+            if (!changed || currentNormalizedInventory() == null) {
+                before.restore(this);
+                revision = beforeRevision;
+                handMutationNonce = beforeHandNonce;
+                persistenceRevisionBound = beforeBound;
+                persistenceLifecycle = beforeLifecycle;
+                return false;
+            }
+            if (revision == beforeRevision) advancePersistenceRevision();
+            return true;
+        } catch (RuntimeException | Error failure) {
+            before.restore(this);
+            revision = beforeRevision;
+            handMutationNonce = beforeHandNonce;
+            persistenceRevisionBound = beforeBound;
+            persistenceLifecycle = beforeLifecycle;
+            throw failure;
+        } finally {
+            merchantMutationInProgress = false;
+        }
+    }
+
+    private final class MerchantPaymentAccess implements ContainerAccess {
+        private ContainerAccess delegate() { return ContainerAccess.of(merchantPayments); }
+        @Override public int slotCount() {
+            synchronized (PlayerInventory.this) { return delegate().slotCount(); }
+        }
+        @Override public short itemType(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().itemType(slot); }
+        }
+        @Override public int count(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().count(slot); }
+        }
+        @Override public int durability(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().durability(slot); }
+        }
+        @Override public long enchantments(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().enchantments(slot); }
+        }
+        @Override public int mapId(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().mapId(slot); }
+        }
+        @Override public int shulkerId(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().shulkerId(slot); }
+        }
+        @Override public String bucketMobData(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().bucketMobData(slot); }
+        }
+        @Override public String itemComponentData(int slot) {
+            synchronized (PlayerInventory.this) { return delegate().itemComponentData(slot); }
+        }
+        @Override public boolean acceptsShulkerBoxes() {
+            synchronized (PlayerInventory.this) { return delegate().acceptsShulkerBoxes(); }
+        }
+        @Override public boolean acceptsStack(long itemEnchantments, int itemMapId, int itemShulkerId) {
+            synchronized (PlayerInventory.this) { return delegate().acceptsStack(itemEnchantments, itemMapId, itemShulkerId); }
+        }
+        @Override public boolean acceptsStack(long itemEnchantments, int itemMapId, int itemShulkerId, String itemBucketMobData, String itemComponentData) {
+            synchronized (PlayerInventory.this) { return delegate().acceptsStack(itemEnchantments, itemMapId, itemShulkerId, itemBucketMobData, itemComponentData); }
+        }
+        @Override public int roomFor(int slot, short type, int itemDurability, long itemEnchantments, int itemMapId, int itemShulkerId) {
+            synchronized (PlayerInventory.this) { return delegate().roomFor(slot, type, itemDurability, itemEnchantments, itemMapId, itemShulkerId); }
+        }
+        @Override public int roomFor(int slot, short type, int itemDurability, long itemEnchantments, int itemMapId, int itemShulkerId, String itemBucketMobData, String itemComponentData) {
+            synchronized (PlayerInventory.this) { return delegate().roomFor(slot, type, itemDurability, itemEnchantments, itemMapId, itemShulkerId, itemBucketMobData, itemComponentData); }
+        }
+        @Override public int take(int slot, int amount) {
+            synchronized (PlayerInventory.this) {
+                if (settlementMutationBlocked()) return 0;
+                if (merchantMutationInProgress) return delegate().take(slot, amount);
+                int[] changed = new int[1];
+                boolean accepted = mutateMerchantPayments(() -> {
+                    changed[0] = delegate().take(slot, amount);
+                    return changed[0] > 0;
+                });
+                return accepted ? changed[0] : 0;
+            }
+        }
+        @Override public int put(int slot, short type, int amount, int itemDurability, long itemEnchantments, int itemMapId, int itemShulkerId) {
+            synchronized (PlayerInventory.this) {
+                if (settlementMutationBlocked()) return 0;
+                if (merchantMutationInProgress) return delegate().put(slot, type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId);
+                int[] changed = new int[1];
+                boolean accepted = mutateMerchantPayments(() -> {
+                    changed[0] = delegate().put(slot, type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId);
+                    return changed[0] > 0;
+                });
+                return accepted ? changed[0] : 0;
+            }
+        }
+        @Override public int put(int slot, short type, int amount, int itemDurability, long itemEnchantments, int itemMapId, int itemShulkerId, String itemBucketMobData, String itemComponentData) {
+            synchronized (PlayerInventory.this) {
+                if (settlementMutationBlocked()) return 0;
+                if (merchantMutationInProgress) return delegate().put(slot, type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId, itemBucketMobData, itemComponentData);
+                int[] changed = new int[1];
+                boolean accepted = mutateMerchantPayments(() -> {
+                    changed[0] = delegate().put(slot, type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId, itemBucketMobData, itemComponentData);
+                    return changed[0] > 0;
+                });
+                return accepted ? changed[0] : 0;
+            }
+        }
+        @Override public int insert(short type, int amount, int itemDurability, long itemEnchantments, int itemMapId, int itemShulkerId) {
+            synchronized (PlayerInventory.this) {
+                if (settlementMutationBlocked()) return 0;
+                if (merchantMutationInProgress) return delegate().insert(type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId);
+                int[] changed = new int[1];
+                boolean accepted = mutateMerchantPayments(() -> {
+                    changed[0] = delegate().insert(type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId);
+                    return changed[0] > 0;
+                });
+                return accepted ? changed[0] : 0;
+            }
+        }
+        @Override public int insert(short type, int amount, int itemDurability, long itemEnchantments, int itemMapId, int itemShulkerId, String itemBucketMobData, String itemComponentData) {
+            synchronized (PlayerInventory.this) {
+                if (settlementMutationBlocked()) return 0;
+                if (merchantMutationInProgress) return delegate().insert(type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId, itemBucketMobData, itemComponentData);
+                int[] changed = new int[1];
+                boolean accepted = mutateMerchantPayments(() -> {
+                    changed[0] = delegate().insert(type, amount, itemDurability, itemEnchantments, itemMapId, itemShulkerId, itemBucketMobData, itemComponentData);
+                    return changed[0] > 0;
+                });
+                return accepted ? changed[0] : 0;
+            }
+        }
+    }
+
     public PlayerInventory() {
         itemType[0] = SWORD_ITEM;
         count[0] = 1;
@@ -3347,6 +3523,12 @@ public final class PlayerInventory {
         if (settlementMutationBlocked()) return List.of();
         preflightRevisionCapacity();
         List<DroppedStack> drops = new ArrayList<>();
+        for (StackSnapshot payment : merchantPaymentSnapshot()) {
+            if (!payment.isEmpty()) addDeathDrop(drops, DroppedStack.exact(payment.itemType(), payment.count(),
+                    payment.durability(), payment.enchantments(), payment.mapId(), payment.shulkerId(),
+                    payment.bucketMobData(), payment.itemComponentData()));
+        }
+        restoreMerchantPayments(new StackSnapshot[]{StackSnapshot.EMPTY, StackSnapshot.EMPTY});
         if (cursorType != EMPTY) {
             addDeathDrop(drops, new DroppedStack(cursorType, cursorCount, cursorDurability,
                     cursorEnchantments, cursorMapId, cursorShulkerId, cursorBucketMobData,
@@ -4811,7 +4993,10 @@ public final class PlayerInventory {
         private final String[] equippedItemComponentData;
         private final StackSnapshot offhand;
 
+        private final StackSnapshot[] merchantPayments;
+
         private TransientMutationSnapshot(PlayerInventory inventory) {
+            merchantPayments = inventory.merchantPaymentSnapshot();
             itemTypes = inventory.itemType.clone();
             counts = inventory.count.clone();
             durabilities = inventory.durability.clone();
@@ -4844,6 +5029,7 @@ public final class PlayerInventory {
         }
 
         private void restore(PlayerInventory inventory) {
+            inventory.restoreMerchantPayments(merchantPayments);
             System.arraycopy(itemTypes, 0, inventory.itemType, 0, SLOTS);
             System.arraycopy(counts, 0, inventory.count, 0, SLOTS);
             System.arraycopy(durabilities, 0, inventory.durability, 0, SLOTS);
@@ -5568,8 +5754,15 @@ public final class PlayerInventory {
      *
      * @return 실제로 상태가 바뀌었으면 true(거부는 false — 호출부가 스냅샷만 되돌려 보낸다).
      */
-    public synchronized boolean clickContainer(
-            ContainerAccess container, ContainerArea area, int slot,
+    public synchronized boolean clickContainer(ContainerAccess container, ContainerArea area, int slot,
+            CraftButton button, boolean shift) {
+        if (container == merchantPaymentAccess) {
+            return mutateMerchantPayments(() -> clickContainerInternal(container, area, slot, button, shift));
+        }
+        return clickContainerInternal(container, area, slot, button, shift);
+    }
+
+    private boolean clickContainerInternal(ContainerAccess container, ContainerArea area, int slot,
             CraftButton button, boolean shift) {
         if (settlementMutationBlocked()) return false;
         if (container == null || area == null || button == null || craftingOpen()) return false;
@@ -5712,8 +5905,14 @@ public final class PlayerInventory {
      * 수량, 오른쪽 드래그는 대상마다 한 개다(바닐라 QUICK_CRAFT). 받을 수 없는 칸과 중복
      * 대상은 세지 않으므로 균등 분배의 분모가 실제 대상 수와 같다.
      */
-    public synchronized boolean dragContainer(
-            ContainerAccess container, ContainerArea[] areas, int[] slots, CraftButton button) {
+    public synchronized boolean dragContainer(ContainerAccess container, ContainerArea[] areas, int[] slots, CraftButton button) {
+        if (container == merchantPaymentAccess) {
+            return mutateMerchantPayments(() -> dragContainerInternal(container, areas, slots, button));
+        }
+        return dragContainerInternal(container, areas, slots, button);
+    }
+
+    private boolean dragContainerInternal(ContainerAccess container, ContainerArea[] areas, int[] slots, CraftButton button) {
         if (settlementMutationBlocked()) return false;
         if (container == null || button == null || areas == null || slots == null
                 || areas.length != slots.length || craftingOpen() || cursorType == EMPTY) {
@@ -5791,6 +5990,13 @@ public final class PlayerInventory {
 
     /** Double-click collection over one open menu, preserving complete stack identity. */
     public synchronized boolean collectContainer(ContainerAccess container) {
+        if (container == merchantPaymentAccess) {
+            return mutateMerchantPayments(() -> collectContainerInternal(container));
+        }
+        return collectContainerInternal(container);
+    }
+
+    private boolean collectContainerInternal(ContainerAccess container) {
         if (settlementMutationBlocked() || craftingOpen() || container == null
                 || cursorType == EMPTY || cursorCount >= stackMax(cursorType)) return false;
         preflightRevisionCapacity();
@@ -7671,8 +7877,19 @@ public final class PlayerInventory {
                 return null;
             }
         }
-        return new InventoryArrays(types, counts, durabilities, masks, copiedMapIds,
+        if (!merchantMutationInProgress) {
+            for (StackSnapshot payment : merchantPaymentSnapshot()) {
+                if (payment.isEmpty()) continue;
+                if (addToArrays(types, counts, durabilities, masks, copiedMapIds, copiedShulkerIds,
+                        copiedBucketMobData, copiedItemComponentData, payment.itemType(), payment.count(),
+                        payment.durability(), payment.enchantments(), payment.mapId(), payment.shulkerId(),
+                        payment.bucketMobData(), payment.itemComponentData(), 0, SLOTS) != payment.count()) return null;
+            }
+        }
+        InventoryArrays normalized = new InventoryArrays(types, counts, durabilities, masks, copiedMapIds,
                 copiedShulkerIds, copiedBucketMobData, copiedItemComponentData);
+        normalized.merchantPaymentsFolded = !merchantMutationInProgress;
+        return normalized;
     }
 
     private static boolean foldComponentStack(short[] types, int[] counts, int[] durabilities,
@@ -7745,6 +7962,7 @@ public final class PlayerInventory {
     }
 
     private static final class InventoryArrays {
+        private boolean merchantPaymentsFolded;
         private final short[] types;
         private final int[] counts;
         private final int[] durabilities;
@@ -7771,6 +7989,7 @@ public final class PlayerInventory {
 
     private void commitInventoryArrays(InventoryArrays source) {
         preflightRevisionCapacity();
+        if (source.merchantPaymentsFolded) restoreMerchantPayments(new StackSnapshot[]{StackSnapshot.EMPTY, StackSnapshot.EMPTY});
         System.arraycopy(source.types, 0, itemType, 0, SLOTS);
         System.arraycopy(source.counts, 0, count, 0, SLOTS);
         System.arraycopy(source.durabilities, 0, durability, 0, SLOTS);
@@ -7873,6 +8092,7 @@ public final class PlayerInventory {
         if (handMutationNonce == Long.MAX_VALUE) {
             throw new IllegalStateException("hand capability nonce space is exhausted");
         }
+        restoreMerchantPayments(source.merchantPayments);
         System.arraycopy(source.itemTypes, 0, itemType, 0, SLOTS);
         System.arraycopy(source.counts, 0, count, 0, SLOTS);
         System.arraycopy(source.durabilities, 0, durability, 0, SLOTS);
