@@ -11515,57 +11515,97 @@ public final class WorldRuntime {
     }
 
     /** Coalesced exact checkpoint; active projectiles move every tick, so no elapsed-time cadence is used. */
-    synchronized void persistProjectiles() {
-        if (projectilePersistence == null || terminalPhase != TerminalPhase.RUNNING) return;
-        if (groundSaveInFlight || groundSettlementInFlight || hasPendingGroundSpawns()) return;
-        long runtimeRevision = mobSystem.projectileRevision();
-        if (runtimeRevision != observedProjectileRevision) {
-            observedProjectileRevision = runtimeRevision;
-            projectileDirtyRevision++;
+    void persistProjectiles() {
+        ProjectileRecoveryCheckpoint recovery;
+        synchronized (this) {
+            if (projectilePersistence == null || terminalPhase != TerminalPhase.RUNNING) return;
+            if (groundSaveInFlight || groundSettlementInFlight || hasPendingGroundSpawns()) return;
+            long runtimeRevision = mobSystem.projectileRevision();
+            if (runtimeRevision != observedProjectileRevision) {
+                observedProjectileRevision = runtimeRevision;
+                projectileDirtyRevision++;
+            }
+            if (!mobSystem.projectileRecoveryPersistencePending()
+                    && projectileDirtyRevision <= projectilePersistedRevision) return;
+            if (projectileSaveInFlight) return;
+            List<com.gameexpert.projectile.dto.ProjectilePersistenceSnapshot> snapshot =
+                    mobSystem.projectilePersistenceSnapshot();
+            if (!mobSystem.projectileRecoveryPersistencePending()) {
+                projectileLedgerMayBeNonEmpty = !snapshot.isEmpty();
+                submitProjectileCheckpoint(projectileDirtyRevision, snapshot);
+                return;
+            }
+            List<com.gameexpert.ground.dto.GroundItemSnapshot> items = itemSystem.persistenceSnapshot();
+            List<com.gameexpert.ground.dto.GroundXpOrbSnapshot> xpOrbs = xpOrbSystem.persistenceSnapshot();
+            validateGroundEntitySnapshotIdentities(items, xpOrbs);
+            recovery = new ProjectileRecoveryCheckpoint(groundRevision, snapshot, items, xpOrbs);
+            projectileSaveInFlight = true;
         }
-        if (!mobSystem.projectileRecoveryPersistencePending()
-                && projectileDirtyRevision <= projectilePersistedRevision) return;
-        if (projectileSaveInFlight) return;
-        List<com.gameexpert.projectile.dto.ProjectilePersistenceSnapshot> snapshot =
-                mobSystem.projectilePersistenceSnapshot();
-        if (mobSystem.projectileRecoveryPersistencePending()) {
-            persistProjectileRecoveryBlocking(snapshot);
-            return;
-        }
-        projectileLedgerMayBeNonEmpty = !snapshot.isEmpty();
-        submitProjectileCheckpoint(projectileDirtyRevision, snapshot);
+        // Earlier writer tasks enqueue completions under this monitor. Keep the owner turn's
+        // atomic recovery boundary, but let those tasks finish while waiting for our transaction.
+        persistProjectileRecoveryBlocking(recovery);
     }
 
-    private void persistProjectileRecoveryBlocking(
-            List<com.gameexpert.projectile.dto.ProjectilePersistenceSnapshot> projectiles) {
-        var items = itemSystem.persistenceSnapshot();
-        var xpOrbs = xpOrbSystem.persistenceSnapshot();
-        validateGroundEntitySnapshotIdentities(items, xpOrbs);
-        long expectedGroundRevision = groundRevision;
-        long committedGroundRevision = expectedGroundRevision + 1;
+    private static final class ProjectileRecoveryCheckpoint {
+        private final long expectedGroundRevision;
+        private final List<com.gameexpert.projectile.dto.ProjectilePersistenceSnapshot> projectiles;
+        private final List<com.gameexpert.ground.dto.GroundItemSnapshot> items;
+        private final List<com.gameexpert.ground.dto.GroundXpOrbSnapshot> xpOrbs;
+
+        private ProjectileRecoveryCheckpoint(long expectedGroundRevision,
+                List<com.gameexpert.projectile.dto.ProjectilePersistenceSnapshot> projectiles,
+                List<com.gameexpert.ground.dto.GroundItemSnapshot> items,
+                List<com.gameexpert.ground.dto.GroundXpOrbSnapshot> xpOrbs) {
+            this.expectedGroundRevision = expectedGroundRevision;
+            this.projectiles = projectiles;
+            this.items = items;
+            this.xpOrbs = xpOrbs;
+        }
+    }
+
+    private void persistProjectileRecoveryBlocking(ProjectileRecoveryCheckpoint recovery) {
+        long committedGroundRevision = recovery.expectedGroundRevision + 1;
         java.util.concurrent.atomic.AtomicReference<GroundMutationOutcome> result =
                 new java.util.concurrent.atomic.AtomicReference<>(GroundMutationOutcome.STALE);
         Runnable transaction = () -> result.set(projectilePersistence.replaceWorldWithGround(
-                worldId, expectedGroundRevision, committedGroundRevision,
-                projectiles, items, xpOrbs));
-        PersistenceExecutor writer = ctx.persistenceExecutor();
-        if (writer == null) {
-            transaction.run();
-        } else {
-            try {
-                writer.submitFuture(transaction).get();
-            } catch (InterruptedException interrupted) {
-                Thread.currentThread().interrupt();
-                throw new IllegalStateException("projectile recovery persistence interrupted", interrupted);
-            } catch (ExecutionException failure) {
-                throw new IllegalStateException("projectile recovery persistence failed", failure.getCause());
+                worldId, recovery.expectedGroundRevision, committedGroundRevision,
+                recovery.projectiles, recovery.items, recovery.xpOrbs));
+        boolean interrupted = false;
+        try {
+            PersistenceExecutor writer = ctx.persistenceExecutor();
+            if (writer == null) {
+                transaction.run();
+            } else {
+                java.util.concurrent.Future<?> pending = writer.submitFuture(transaction);
+                // An interrupt does not cancel an already-running DB transaction. Do not release
+                // the shared ground lane until its outcome is known; restore the interrupt below.
+                boolean completed = false;
+                while (!completed) {
+                    try {
+                        pending.get();
+                        completed = true;
+                    } catch (InterruptedException interruption) {
+                        interrupted = true;
+                    } catch (ExecutionException failure) {
+                        throw new IllegalStateException("projectile recovery persistence failed", failure.getCause());
+                    }
+                }
             }
+            synchronized (this) {
+                if (result.get() != GroundMutationOutcome.COMMITTED) return;
+                groundRevision = committedGroundRevision;
+                projectileLedgerMayBeNonEmpty = !recovery.projectiles.isEmpty();
+                projectilePersistedRevision = ++projectileDirtyRevision;
+                if (terminalPhase == TerminalPhase.RUNNING || terminalPhase == TerminalPhase.DRAINING) {
+                    mobSystem.acknowledgeProjectileRecoveryPersistence();
+                }
+            }
+        } finally {
+            synchronized (this) {
+                projectileSaveInFlight = false;
+            }
+            if (interrupted) Thread.currentThread().interrupt();
         }
-        if (result.get() != GroundMutationOutcome.COMMITTED) return;
-        groundRevision = committedGroundRevision;
-        projectileLedgerMayBeNonEmpty = !projectiles.isEmpty();
-        projectilePersistedRevision = ++projectileDirtyRevision;
-        mobSystem.acknowledgeProjectileRecoveryPersistence();
     }
 
     /** Synchronous command boundary used only for committed player launches, never for projectile movement. */

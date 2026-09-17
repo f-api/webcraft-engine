@@ -123,6 +123,7 @@ public class PersistenceExecutor {
         try {
             if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
                 List<Runnable> dropped = executor.shutdownNow();
+                cancelUnstartedFutures(dropped);
                 if (!dropped.isEmpty()) {
                     log.error("영속 executor 종료 대기 초과 — 실행되지 못한 작업 {}건을 버립니다", dropped.size());
                 }
@@ -130,9 +131,17 @@ public class PersistenceExecutor {
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             List<Runnable> dropped = executor.shutdownNow();
+            cancelUnstartedFutures(dropped);
             if (!dropped.isEmpty()) {
                 log.error("영속 executor 종료 대기 중단 — 실행되지 못한 작업 {}건을 버립니다", dropped.size());
             }
         }
+    }
+
+    /** Removed queue entries never ran; unblock their waiters without cancelling a running commit. */
+    private static void cancelUnstartedFutures(List<Runnable> dropped) {
+        dropped.stream().filter(task -> task instanceof Future<?>)
+                .map(task -> (Future<?>) task)
+                .forEach(task -> task.cancel(false));
     }
 }

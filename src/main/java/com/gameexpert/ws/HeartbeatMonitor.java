@@ -54,6 +54,14 @@ public final class HeartbeatMonitor {
     }
 
     static void closeIfExpired(WebSocketSession session, long now) {
+        // Physical input takes the transport lock before the session monitor. Timeout closure
+        // must use the same order and recheck the timestamp after a waiting ping can complete.
+        synchronized (com.gameexpert.cluster.ClusterRuntime.sessionTransportLock(session)) {
+            closeUnderTransportLock(session, now);
+        }
+    }
+
+    private static void closeUnderTransportLock(WebSocketSession session, long now) {
         synchronized (session) {
             if (!session.isOpen()
                     || session instanceof DimensionSession dimension && !dimension.inputReady()) {

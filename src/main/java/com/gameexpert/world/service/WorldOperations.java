@@ -158,14 +158,17 @@ public class WorldOperations {
     }
 
     public void deleteWorld(Long id, Runnable deleteWorldRow) {
+        if (presenceService.onlineCount(id) > 0) throw new ConflictException("WORLD_IN_USE");
+        boolean coordinated = WorldDeletionCoordinator.beforeDelete(id);
         com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
-        if (cluster != null && cluster.deleteWorldOnOwner(id)) return;
+        if (!coordinated && cluster != null && cluster.deleteWorldOnOwner(id)) return;
 
-        if (presenceService.onlineCount(id) > 0 || !engineManager.beginWorldDeletion(id)) {
+        if (presenceService.onlineCount(id) > 0
+                || (!coordinated && !engineManager.beginWorldDeletion(id))) {
             throw new ConflictException("WORLD_IN_USE");
         }
         boolean transactionSynchronization = TransactionSynchronizationManager.isSynchronizationActive();
-        if (transactionSynchronization) {
+        if (transactionSynchronization && !coordinated) {
             TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
                 @Override
                 public void afterCompletion(int status) {
@@ -176,7 +179,7 @@ public class WorldOperations {
         try {
             deleteWorldAggregate(id, deleteWorldRow);
         } finally {
-            if (!transactionSynchronization) engineManager.endWorldDeletion(id);
+            if (!transactionSynchronization && !coordinated) engineManager.endWorldDeletion(id);
         }
     }
 
@@ -195,16 +198,22 @@ public class WorldOperations {
 
     private void deleteWorldAggregate(Long id, Runnable deleteWorldRow) {
         if (dimensions != null) {
-            var children = dimensions.findByRootId(id);
+            java.util.List<com.gameexpert.world.entity.WorldDimension> children = dimensions.findByRootId(id);
+            WorldDeletionCoordinator.requireChildrenReserved(id,
+                    children.stream().map(mapping -> mapping.getChild().getId()).toList());
             // Reserve every child before changing any aggregate; rollback releases reservations.
-            for (var mapping : children) {
+            for (com.gameexpert.world.entity.WorldDimension mapping : children) {
                 long childId = mapping.getChild().getId();
-                if (presenceService.onlineCount(childId) > 0 || !engineManager.beginWorldDeletion(childId)) {
+                boolean reserved = WorldDeletionCoordinator.hasReservation(childId);
+                if (presenceService.onlineCount(childId) > 0
+                        || (!reserved && !engineManager.beginWorldDeletion(childId))) {
                     throw new ConflictException("WORLD_IN_USE");
                 }
-                TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
-                    @Override public void afterCompletion(int status) { engineManager.endWorldDeletion(childId); }
-                });
+                if (!reserved) {
+                    TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                        @Override public void afterCompletion(int status) { engineManager.endWorldDeletion(childId); }
+                    });
+                }
             }
             dimensionTravelRows.deleteForRoot(id);
             dimensions.deleteAll(children);

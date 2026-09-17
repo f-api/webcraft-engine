@@ -345,6 +345,13 @@ public final class ClusterRuntime implements AutoCloseable {
     public WebSocketSession currentPhysical(WebSocketSession session) {
         Edge edge=edgeOf(session); return edge==null ? null : edge.current;
     }
+    /** Keeps transport-before-session ordering even while an edge's runtime is shutting down. */
+    public static Object sessionTransportLock(WebSocketSession session) {
+        if (session instanceof EdgeSession edgeSession) return edgeSession.edge.transportLock;
+        ClusterRuntime cluster = current();
+        return cluster != null && cluster.isPhysical(session) ? cluster.physicalLock(session) : session;
+    }
+
     public Object physicalLock(WebSocketSession session) {
         Edge edge=edgeOf(session);
         return edge==null ? session : edge.transportLock;
