@@ -37,6 +37,8 @@ public final class ClusterRuntime implements AutoCloseable {
     private static final Logger log = LoggerFactory.getLogger(ClusterRuntime.class);
     private static final int MAX_PACKET_CHARS = 24 * 1024 * 1024;
     private static final String WIRE = "webcraft.cluster.wire";
+    /** Close reasons meaning the resolved owner is gone or no longer accepts this generation. */
+    private static final Set<String> OWNER_UNAVAILABLE = Set.of("ENGINE_OWNER_LOST", "WORLD_AUTHORITY_UNAVAILABLE");
     private static final DefaultRedisScript<Long> PUSH = new DefaultRedisScript<>("""
         local n=string.len(ARGV[1])
         if redis.call('LLEN',KEYS[1])>=2048 or tonumber(redis.call('GET',KEYS[2]) or '0')+n>67108864 then return 0 end
@@ -334,7 +336,14 @@ public final class ClusterRuntime implements AutoCloseable {
             edge.send("open", json.writeValueAsString(identity));
             edge.opened.get(30, TimeUnit.SECONDS);
             return edge.current;
-        } catch (Exception failure) { edge.terminate(new CloseStatus(1012, "ENGINE_OPEN_FAILED")); throw failure; }
+        } catch (Exception failure) {
+            edge.terminate(new CloseStatus(1012, "ENGINE_OPEN_FAILED"));
+            CloseStatus closed=edge.closeStatus;
+            if (closed != null && closed.getCode() == 1012 && OWNER_UNAVAILABLE.contains(closed.getReason())) {
+                throw new WorldAuthorityUnavailableException(owner.root(), owner.node(), closed.getReason(), failure);
+            }
+            throw failure;
+        }
     }
     public boolean isPhysical(WebSocketSession session) {
         return session instanceof EdgeSession || physicalEdges.containsKey(session.getId());
@@ -488,6 +497,7 @@ public final class ClusterRuntime implements AutoCloseable {
         final SerialMailbox mailbox;
         volatile EdgeSession current;
         volatile boolean ready;
+        volatile CloseStatus closeStatus;
         private long requestSequence=-1;
         private long lastFrame;
         private long generation;
@@ -570,7 +580,8 @@ public final class ClusterRuntime implements AutoCloseable {
                 }
                 case "frame" -> frame(packet);
                 case "result" -> completeQuery(packet);
-                case "closed" -> terminate(new CloseStatus(packet.code(),"ENGINE_REMOTE_CLOSED"));
+                case "closed" -> terminate(new CloseStatus(packet.code(),
+                        "WORLD_AUTHORITY_UNAVAILABLE".equals(packet.payload()) ? "WORLD_AUTHORITY_UNAVAILABLE" : "ENGINE_REMOTE_CLOSED"));
                 default -> throw new IllegalArgumentException("Unexpected edge envelope");
             }
         }
@@ -632,6 +643,7 @@ public final class ClusterRuntime implements AutoCloseable {
         }
         void terminate(CloseStatus status) {
             if(!closed.compareAndSet(false,true)) return;
+            closeStatus=status;
             IllegalStateException failure=new IllegalStateException("Engine connection closed: "+status.getCode());
             failQueries(failure);
             physicalEdges.remove(physical.getId(),this); wireEdges.remove(wire,this);
