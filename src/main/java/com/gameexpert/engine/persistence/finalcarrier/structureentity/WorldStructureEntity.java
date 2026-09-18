@@ -18,6 +18,7 @@ import lombok.NoArgsConstructor;
 /** Complete durable receipt and exact source facts for one encounter-ordered ENTS row. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_structure_entities", uniqueConstraints = {
         @UniqueConstraint(name = "uk_structure_entity_install_ordinal",
                 columnNames = {"lane_installation_identity", "encounter_ordinal"}),

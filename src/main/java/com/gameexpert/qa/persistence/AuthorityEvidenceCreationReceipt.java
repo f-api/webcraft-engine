@@ -15,6 +15,7 @@ import jakarta.persistence.Version;
 
 /** Durable one-shot identity for an authority-evidence creation capability. */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "authority_evidence_creation_receipts", uniqueConstraints = {
         @UniqueConstraint(name = "uk_authority_evidence_receipt_world",
                 columnNames = "world_id"),

@@ -23,6 +23,7 @@ import lombok.NoArgsConstructor;
  */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_villager_job_claims",
         uniqueConstraints = {

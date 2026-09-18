@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** A chunk-unloaded PrimedTnt entity, persisted independently from block diffs. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_primed_tnt", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_primed_tnt_id", columnNames = { "world_id", "tnt_id" }))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

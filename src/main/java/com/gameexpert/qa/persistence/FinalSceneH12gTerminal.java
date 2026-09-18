@@ -23,6 +23,7 @@ import java.util.regex.Pattern;
 
 /** One durable H12g terminal envelope, uniquely bound to a world, source and logical key. */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "`final_scene_h12g_terminals`", uniqueConstraints =
         @UniqueConstraint(name = "uk_h12g_terminal_binding_digest",
                 columnNames = "binding_digest"))

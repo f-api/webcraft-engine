@@ -17,6 +17,7 @@ import lombok.NoArgsConstructor;
 /** Exact durable semantic mutation installed from one canonical final-carrier lane. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "final_carrier_lane_mutations", uniqueConstraints = @UniqueConstraint(
         name = "uk_final_carrier_lane_source",
         columnNames = {"world_id", "chunk_x", "chunk_z", "lane", "source_fingerprint"}))

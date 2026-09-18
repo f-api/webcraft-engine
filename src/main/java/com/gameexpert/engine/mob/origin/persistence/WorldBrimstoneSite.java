@@ -13,6 +13,7 @@ import lombok.NoArgsConstructor;
 
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_brimstone_sites", uniqueConstraints = {
         @UniqueConstraint(name = "uk_brimstone_world_site", columnNames = {"world_id", "site_key"}) })
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

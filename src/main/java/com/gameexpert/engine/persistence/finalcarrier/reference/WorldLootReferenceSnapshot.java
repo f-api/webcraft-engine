@@ -8,6 +8,7 @@ import lombok.NoArgsConstructor;
 /** Immutable membership and prior-claim evidence used to replay a selected producer's late loot. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_loot_reference_snapshots", uniqueConstraints =
         @UniqueConstraint(name = "uk_world_loot_reference_snapshot", columnNames = {
                 "world_id", "baseline_id", "snapshot_identity"}))

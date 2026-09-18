@@ -22,6 +22,7 @@ import lombok.NoArgsConstructor;
 
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_lecterns",
         uniqueConstraints = @UniqueConstraint(name = "uq_world_lectern_xyz",
                 columnNames = {"world_id", "x", "y", "z"}),

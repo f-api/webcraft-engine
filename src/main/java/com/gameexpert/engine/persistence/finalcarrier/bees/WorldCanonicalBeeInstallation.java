@@ -20,6 +20,7 @@ import lombok.NoArgsConstructor;
 /** Immutable terminal receipt for one schema-4 canonical BEES lane installation. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_canonical_bee_installations", uniqueConstraints = {
         @UniqueConstraint(name = "uk_canonical_bees_installation",
                 columnNames = {"world_id", "chunk_x", "chunk_z", "installation_identity"})

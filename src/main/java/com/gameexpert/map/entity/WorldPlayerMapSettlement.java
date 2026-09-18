@@ -10,6 +10,7 @@ import jakarta.persistence.UniqueConstraint;
 
 /** 빈 지도 사용 명령의 영구 멱등성 영수증. */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_player_map_settlements", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_player_map_settlement", columnNames = {"world_id", "settlement_id"}))
 public class WorldPlayerMapSettlement {

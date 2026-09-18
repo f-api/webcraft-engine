@@ -18,6 +18,7 @@ import java.util.regex.Pattern;
  * The receipt is the only committed effect owned by this boundary.
  */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "`final_scene_h12g_consumer_receipts`", uniqueConstraints =
         @UniqueConstraint(name = "uk_h12g_consumer_receipt_identity",
                 columnNames = {"world_id", "source_identity", "phase", "idempotency_key"}))

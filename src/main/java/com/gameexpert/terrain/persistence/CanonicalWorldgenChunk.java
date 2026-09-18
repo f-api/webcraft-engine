@@ -13,6 +13,7 @@ import java.util.Arrays;
 
 /** MySQL row for one current canonical final-carrier commit. */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "canonical_worldgen_chunks", uniqueConstraints = @UniqueConstraint(
         name = "uk_canonical_worldgen_chunk", columnNames = {"world_id", "chunk_x", "chunk_z"}))
 public class CanonicalWorldgenChunk {

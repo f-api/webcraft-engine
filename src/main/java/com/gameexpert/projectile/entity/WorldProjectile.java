@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** Durable row for one live server-authoritative projectile. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_projectiles", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_projectile_id", columnNames = {"world_id", "projectile_id"}))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

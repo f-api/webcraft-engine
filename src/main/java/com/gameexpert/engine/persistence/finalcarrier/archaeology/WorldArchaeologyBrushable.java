@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** Durable projection of one installed final-carrier archaeology aggregate. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_archaeology_brushables", uniqueConstraints = {
         @UniqueConstraint(name = "uk_archaeology_installation",
                 columnNames = "installation_identity"),

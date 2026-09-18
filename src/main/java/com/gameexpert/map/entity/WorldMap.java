@@ -26,6 +26,7 @@ import lombok.NoArgsConstructor;
 /** 월드가 소유하는 scale-0 채워진 지도 저장 행입니다. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_maps",
         uniqueConstraints = @UniqueConstraint(

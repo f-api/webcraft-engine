@@ -26,6 +26,7 @@ import lombok.NoArgsConstructor;
  */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_clock_states")
 @NoArgsConstructor(access = AccessLevel.PROTECTED)
 public class WorldClockState {

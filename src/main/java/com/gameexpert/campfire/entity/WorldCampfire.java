@@ -17,6 +17,7 @@ import lombok.NoArgsConstructor;
 /** 월드 좌표에 귀속된 모닥불 음식 네 칸과 각 조리 진행의 영속 스냅샷입니다. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_campfires",
         uniqueConstraints = @UniqueConstraint(

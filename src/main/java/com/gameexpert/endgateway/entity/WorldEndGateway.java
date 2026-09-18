@@ -19,6 +19,7 @@ import lombok.NoArgsConstructor;
 /** [END-GATEWAY] 엔드 관문 블록 엔티티의 출구(바닐라 {@code exit_portal}·{@code ExactTeleport}) 한 행. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_end_gateways",
         uniqueConstraints = @UniqueConstraint(name = "uq_world_end_gateway_xyz",
                 columnNames = {"world_id", "x", "y", "z"}))

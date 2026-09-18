@@ -59,6 +59,7 @@ import lombok.NoArgsConstructor;
  */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_generated_structure_entity_states", uniqueConstraints = {
         @UniqueConstraint(name = "uk_generated_structure_entity_world_entity",
                 columnNames = {"world_id", "authoritative_entity_id"}),

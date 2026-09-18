@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** Durable write-ahead identity for cross-aggregate animal settlements. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_animal_settlements", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_animal_settlement_key", columnNames = { "world_id", "settlement_key" }))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

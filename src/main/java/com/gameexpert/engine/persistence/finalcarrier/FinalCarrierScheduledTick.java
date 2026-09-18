@@ -22,6 +22,7 @@ import lombok.NoArgsConstructor;
 /** First-winner durable BLOCK/FLUID scheduled tick. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "final_carrier_scheduled_ticks", uniqueConstraints = {
         @UniqueConstraint(name = "uk_final_carrier_scheduled_tick",
                 columnNames = {"world_id", "lane", "x", "y", "z", "type_key"}),

@@ -16,6 +16,7 @@ import lombok.NoArgsConstructor;
 /** Strict current-schema snapshot of one coordinate-owned brewing stand. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_brewing_stands", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_brewing_stand_pos",
         columnNames = { "world_id", "pos_x", "pos_y", "pos_z" }))

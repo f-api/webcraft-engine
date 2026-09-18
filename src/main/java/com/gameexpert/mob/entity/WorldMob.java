@@ -18,6 +18,7 @@ import lombok.NoArgsConstructor;
 /** 서버를 다시 시작해도 복원할 현재 몹 하나의 최소 상태입니다. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_mobs",
         uniqueConstraints = @UniqueConstraint(

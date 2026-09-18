@@ -18,6 +18,7 @@ import javax.crypto.spec.SecretKeySpec;
 
 /** Database-resident HMAC authority; key bytes never leave this entity. */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "`final_scene_h12g_terminal_keys`")
 public class FinalSceneH12gTerminalKey {
     public static final long SINGLETON_ID = 1L;

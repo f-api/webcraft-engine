@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** Exact live-golem identity retained while its authoritative form is a statue block. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_copper_golem_statues", uniqueConstraints = {
         @UniqueConstraint(name = "uk_copper_statue_position",
                 columnNames = {"world_id", "x", "y", "z"}),

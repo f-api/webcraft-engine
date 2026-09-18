@@ -11,6 +11,7 @@ import org.hibernate.annotations.OnDeleteAction;
 
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_runtime_speleothem_falls", uniqueConstraints = @UniqueConstraint(
         name = "uk_runtime_speleothem_identity", columnNames = {"world_id", "event_key"}))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

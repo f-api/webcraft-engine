@@ -23,6 +23,7 @@ import lombok.NoArgsConstructor;
 /** [CONTAINER-MENUS] One stored armor stand or minecart; see {@link PlacedEntitySnapshot}. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_placed_entities", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_placed_entity_id", columnNames = { "world_id", "entity_id" }))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

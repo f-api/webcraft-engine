@@ -21,6 +21,7 @@ import com.gameexpert.engine.inventory.PlayerInventory.StackSnapshot;
 /** 월드 좌표에 귀속된 화로 세 칸과 남은 연료/조리 진행의 영속 스냅샷입니다. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_furnaces",
         options = "DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_unicode_ci",

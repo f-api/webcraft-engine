@@ -12,6 +12,7 @@ import jakarta.persistence.UniqueConstraint;
 
 /** Write-ahead identity for one ordinary-frog to poison-frog conversion. */
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_frog_conversion_settlements", uniqueConstraints = @UniqueConstraint(
         name = "uk_frog_conversion_source_sequence",
         columnNames = {"world_id", "source_mob_id", "conversion_sequence"}))

@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** receipt 소비와 실제 플레이어 저장 사이의 유실 구간을 없애는 durable reward outbox. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_reward_deliveries", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_reward_delivery",
         columnNames = {"world_id", "raid_id", "reward_token"}))

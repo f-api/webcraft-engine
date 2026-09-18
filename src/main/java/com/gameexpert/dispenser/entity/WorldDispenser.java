@@ -25,6 +25,7 @@ import lombok.NoArgsConstructor;
 /** Current-schema authoritative nine-slot dispenser aggregate. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_dispensers", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_dispenser_pos",
         columnNames = {"world_id", "pos_x", "pos_y", "pos_z"}))

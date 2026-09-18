@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** 주민 한 명의 번식·수면·골렘 기억 durable 상태. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_villager_society_states",
         uniqueConstraints = @UniqueConstraint(

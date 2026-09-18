@@ -15,6 +15,7 @@ import lombok.NoArgsConstructor;
 /** Durable row for an experience orb that is live in one world runtime. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_ground_xp_orbs", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_ground_xp_orb_id", columnNames = {"world_id", "entity_id"}))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

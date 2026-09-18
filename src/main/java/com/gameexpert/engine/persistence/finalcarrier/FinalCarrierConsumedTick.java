@@ -27,6 +27,7 @@ import java.util.Objects;
 /** Append-only settlement receipt for a scheduled tick. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "final_carrier_consumed_ticks", uniqueConstraints = {
         @UniqueConstraint(name = "uk_final_carrier_consumed_tick",
                 columnNames = {"world_id", "lane", "x", "y", "z", "type_key"}),

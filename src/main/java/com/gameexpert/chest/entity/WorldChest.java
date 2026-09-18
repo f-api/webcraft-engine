@@ -45,6 +45,7 @@ import lombok.NoArgsConstructor;
  */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(
         name = "world_chests",
         uniqueConstraints = @UniqueConstraint(

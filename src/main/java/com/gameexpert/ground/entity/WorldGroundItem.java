@@ -17,6 +17,7 @@ import lombok.NoArgsConstructor;
 /** Durable row for a dropped item that is live in one world runtime. */
 @Getter
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_ground_items", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_ground_item_id", columnNames = {"world_id", "entity_id"}))
 @NoArgsConstructor(access = AccessLevel.PROTECTED)

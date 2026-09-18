@@ -5,6 +5,7 @@ import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 
 @Entity
+@org.hibernate.annotations.DynamicUpdate
 @Table(name = "world_loot_reference_pages", uniqueConstraints = @UniqueConstraint(
         name = "uk_world_loot_reference_page", columnNames = {
                 "world_id", "baseline_id", "snapshot_identity", "payload_kind", "page_number"}))
