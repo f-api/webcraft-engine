@@ -18301,6 +18301,34 @@ public final class WorldRuntime {
      * settlement can enter the same single-writer lane. Runtime-only unit contexts intentionally
      * have no persistence boundary; production contexts always provide both collaborators.
      */
+    /**
+     * Same baseline, but the edit's own cells travel with it: the drained diffs and the inventory
+     * that paid for them commit in one transaction, so an owner crash cannot keep one without the
+     * other. Callers use this only for edits with no separate block-entity settlement.
+     */
+    void queuePlayerInventoryBaselineWithEditCells(PlayerTickState state) {
+        if (terminalPhase != TerminalPhase.RUNNING
+                || ctx.persistenceExecutor() == null || ctx.stateService() == null) return;
+        java.util.Map<BlockPos, com.gameexpert.block.persistence.BlockDiffBuffer.Change> diffs =
+                ctx.blockDiffBuffer() == null ? java.util.Map.of()
+                        : ctx.blockDiffBuffer().drain(worldId);
+        state.beginPersistence();
+        long stateRevision = state.stateRevision();
+        long inventoryRevision = state.inventory().revision();
+        Runnable restore = () -> {
+            if (ctx.blockDiffBuffer() != null) ctx.blockDiffBuffer().restore(worldId, diffs);
+        };
+        saveState(state,
+                () -> enqueuePersistenceCompletion(
+                        () -> state.acknowledgePersistence(stateRevision, inventoryRevision),
+                        state::rejectPersistence),
+                () -> { restore.run(); enqueuePersistenceCompletion(state::rejectPersistence,
+                        state::rejectPersistence); },
+                () -> { restore.run(); enqueuePersistenceCompletion(state::rejectPersistence,
+                        state::rejectPersistence); },
+                false, false, diffs);
+    }
+
     void queuePlayerInventoryBaseline(PlayerTickState state) {
         if (terminalPhase != TerminalPhase.RUNNING
                 || ctx.persistenceExecutor() == null || ctx.stateService() == null) return;
@@ -18499,6 +18527,14 @@ public final class WorldRuntime {
 
     private boolean saveState(PlayerTickState state, Runnable afterSave, Runnable afterFailure,
             Runnable afterStale, boolean allowDraining, boolean allowDisposed) {
+        return saveState(state, afterSave, afterFailure, afterStale, allowDraining, allowDisposed,
+                java.util.Map.of());
+    }
+
+    private boolean saveState(PlayerTickState state, Runnable afterSave, Runnable afterFailure,
+            Runnable afterStale, boolean allowDraining, boolean allowDisposed,
+            java.util.Map<BlockPos, com.gameexpert.block.persistence.BlockDiffBuffer.Change>
+                    blockDiffs) {
         TerminalPhase phase = terminalPhase;
         if (phase != TerminalPhase.RUNNING
                 && !(allowDraining && phase == TerminalPhase.DRAINING)
@@ -18555,8 +18591,8 @@ public final class WorldRuntime {
         try {
             accepted = writer.trySubmit(() -> {
             try {
-                PlayerWorldStateService.RuntimeSaveOutcome outcome =
-                        stateService.saveDimensionRuntime(playerId, worldId, inventoryRevision,
+                java.util.function.Supplier<PlayerWorldStateService.RuntimeSaveOutcome> save =
+                        () -> stateService.saveDimensionRuntime(playerId, worldId, inventoryRevision,
                         x, y, z, yaw, pitch, health,
                         inventory.itemTypes(), inventory.counts(), inventory.durabilities(),
                         inventory.enchantments(), inventory.mapIds(), inventory.shulkerIds(),
@@ -18567,6 +18603,9 @@ public final class WorldRuntime {
                         spawnX, spawnY, spawnZ, hunger, saturationMilli, xpTotal, enchantSeed,
                         timeSinceRestMcTicks, enderChest, statusEffects, effectClocks,
                         selectedSlot, fireTicks, fireAccum, state.dimensionIdentity(worldId));
+                PlayerWorldStateService.RuntimeSaveOutcome outcome = blockDiffs.isEmpty()
+                        ? save.get()
+                        : stateService.withBlockDiffs(worldId, blockDiffs, save);
                 if (outcome == PlayerWorldStateService.RuntimeSaveOutcome.STALE) {
                     if (afterStale != null) afterStale.run();
                 } else if (afterSave != null) {

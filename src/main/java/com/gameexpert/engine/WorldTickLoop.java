@@ -3187,6 +3187,19 @@ public final class WorldTickLoop {
     }
 
     /** 컨테이너 정산 창이 소유하는 편집인지 판정한다(대상 블록 또는 설치하려는 블록 기준). */
+    /** A placement whose cell carries no separately settled block-entity payload. */
+    private static boolean plainPlacement(int current, PlayerAction.BlockEdit edit,
+            boolean placedSign) {
+        int placed = Short.toUnsignedInt(edit.blockType());
+        return !placedSign && !isContainerClassEdit(current, edit)
+                && !Blocks.isBanner(placed) && !Blocks.isBanner(current)
+                && !Blocks.isDecoratedPot(placed) && !Blocks.isDecoratedPot(current)
+                && !Blocks.isShulkerBox(placed) && !Blocks.isShulkerBox(current)
+                && !Blocks.isShelf(placed) && !Blocks.isShelf(current)
+                && placed != Blocks.LECTERN && current != Blocks.LECTERN
+                && placed != Blocks.JUKEBOX && current != Blocks.JUKEBOX;
+    }
+
     private static boolean isContainerClassEdit(int current, PlayerAction.BlockEdit edit) {
         return InteractRules.isContainer(current) || FurnaceRules.isFurnace(current)
                 || current == Blocks.CAMPFIRE
@@ -3735,7 +3748,18 @@ public final class WorldTickLoop {
             // source revision. Placement consumed an item, so persist that complete baseline now;
             // the single writer guarantees an immediately following chest/furnace/campfire
             // settlement runs after it instead of spuriously returning STALE.
-            rt.queuePlayerInventoryBaseline(player);
+            // A plain placement pays for its block with an item, so the cell and the inventory must
+            // reach the database together; block-entity placements keep their own settlement order.
+            if (plainPlacement(current, edit, placedSign)) {
+                int placedBlock = residentBlockType(rt.accessor(), edit.x(), edit.y(), edit.z());
+                if (placedBlock != UNAVAILABLE_BLOCK && rt.ctx().blockDiffBuffer() != null) {
+                    rt.ctx().blockDiffBuffer().put(rt.worldId(), edit.x(), edit.y(), edit.z(),
+                            placedBlock, rt.blockState(edit.x(), edit.y(), edit.z(), placedBlock));
+                }
+                rt.queuePlayerInventoryBaselineWithEditCells(player);
+            } else {
+                rt.queuePlayerInventoryBaseline(player);
+            }
             sendTo(player, inventoryMessage(player));
             broadcastWorldSound("block_place", edit.x(), edit.y(), edit.z(), edit.blockType());
             if (placedSign) {

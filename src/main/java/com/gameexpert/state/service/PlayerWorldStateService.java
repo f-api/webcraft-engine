@@ -39,7 +39,22 @@ import com.gameexpert.state.service.inventory.StaleInventoryMutationException;
 @Service
 @RequiredArgsConstructor
 public class PlayerWorldStateService {
+    private final com.gameexpert.block.persistence.BlockDiffFlusher blockDiffFlusher;
     private volatile DimensionTravelPersistence dimensionTravel;
+
+    /**
+     * Commits the caller's pending block diffs in the same transaction as the runtime save it
+     * wraps. A world edit that consumed an item must not be able to reach the database without the
+     * block it produced: an owner crash between two separate writes would drop one of them.
+     */
+    @org.springframework.transaction.annotation.Transactional
+    public <T> T withBlockDiffs(Long worldId,
+            java.util.Map<com.gameexpert.engine.BlockPos,
+                    com.gameexpert.block.persistence.BlockDiffBuffer.Change> blockDiffs,
+            java.util.function.Supplier<T> save) {
+        blockDiffFlusher.writeDetached(worldId, blockDiffs);
+        return save.get();
+    }
 
     public synchronized void attachDimensionTravel(DimensionTravelPersistence travel) {
         if (travel == null || dimensionTravel != null && dimensionTravel != travel) throw new IllegalStateException("dimension persistence already attached");
