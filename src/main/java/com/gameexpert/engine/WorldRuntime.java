@@ -2541,12 +2541,16 @@ public final class WorldRuntime {
 
     private void prepareChunkActivationPlan(ChunkActivationDemand demand, long key) {
         if (chunkProductSource instanceof com.gameexpert.world.dimension.DimensionChunkProductSource custom) {
-            if (!ownerTurnMayContinue()) return;
-            publishPreparedChunkActivation(key, new PreparedChunkActivation(
-                    demand.generation, demand.chunkX, demand.chunkZ,
-                    persistedFluidWakeups(demand.persistedDiffs),
-                    custom.initialStates(seed, demand.chunkX, demand.chunkZ),
-                    List.of(), List.of(), false));
+            try {
+                if (!ownerTurnMayContinue()) return;
+                publishPreparedChunkActivation(key, new PreparedChunkActivation(
+                        demand.generation, demand.chunkX, demand.chunkZ,
+                        persistedFluidWakeups(demand.persistedDiffs),
+                        custom.initialStates(seed, demand.chunkX, demand.chunkZ),
+                        List.of(), List.of(), false));
+            } finally {
+                pendingChunkActivationPlans.remove(key, demand.generation);
+            }
             return;
         }
         stampActivationStage(key, ACT_PLAN_START);
@@ -7635,6 +7639,8 @@ public final class WorldRuntime {
      * cross-boundary trees and a larger client loading count.
      */
     private boolean activationTreeNeighborhoodReady(int chunkX, int chunkZ) {
+        // Dimension providers already return their complete terrain and do not use Overworld trees.
+        if (chunkProductSource instanceof com.gameexpert.world.dimension.DimensionChunkProductSource) return true;
         if (!started || !testSimulationChunks.isEmpty()) return true;
         for (int dz = -1; dz <= 1; dz++) {
             for (int dx = -1; dx <= 1; dx++) {

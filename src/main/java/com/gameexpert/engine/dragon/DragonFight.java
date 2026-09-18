@@ -680,6 +680,8 @@ public final class DragonFight implements DragonWorld {
     // ═══════════════ 드래곤 ═══════════════
 
     private void tickDragon() {
+        // Restored phases must not cache unloaded-column sentinel heights as flight targets.
+        if (!host.arenaLoaded()) return;
         DragonBrain dragon = brain;
         if (dragon == null || state.dragonMobId == 0) return;
         if (!host.dragonPresent(state.dragonMobId)) {
