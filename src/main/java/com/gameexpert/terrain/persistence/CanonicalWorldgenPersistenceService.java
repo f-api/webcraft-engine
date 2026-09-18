@@ -175,6 +175,16 @@ public class CanonicalWorldgenPersistenceService
                 .orElse(null);
     }
 
+    /** Lane masks alone. Each carrier blob read costs hundreds of kilobytes, so decisions that
+     * only need claim/ack/rejected bits never load one. */
+    @Override @Transactional(readOnly = true)
+    public LaneMasks laneMasks(long worldId, int chunkX, int chunkZ) {
+        return chunks.findLaneMaskRow(worldId, chunkX, chunkZ)
+                .map(row -> new LaneMasks(row.getLaneClaimMask(), row.getLaneAckMask(),
+                        row.getLaneRejectedMask()))
+                .orElse(null);
+    }
+
     /** Existence only: no carrier blob is read, so a committed-or-not test costs one index probe. */
     @Override @Transactional(readOnly = true)
     public boolean isCommitted(long worldId, int chunkX, int chunkZ) {

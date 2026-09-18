@@ -34,6 +34,19 @@ public interface CanonicalWorldgenStore {
 
     CanonicalChunkSnapshot find(long worldId, int chunkX, int chunkZ);
 
+    /** Lane masks without the carrier blobs: a lane that only decides claim/ack/rejected reads this. */
+    record LaneMasks(int claim, int ack, int rejected) { }
+
+    /**
+     * Reads the lane bookkeeping alone. The default falls back to the full snapshot so stores that
+     * hold carriers in memory keep working; the database store overrides it with a blob-free query.
+     */
+    default LaneMasks laneMasks(long worldId, int chunkX, int chunkZ) {
+        CanonicalChunkSnapshot snapshot = find(worldId, chunkX, chunkZ);
+        return snapshot == null ? null : new LaneMasks(snapshot.laneClaimMask(),
+                snapshot.laneAckMask(), snapshot.laneRejectedMask());
+    }
+
     default com.gameexpert.authority.versioned.CanonicalStructureSnapshot structureSnapshot(
             long worldId, com.gameexpert.world.WorldGenerationProfile profile) {
         throw new IllegalStateException("atomic structure snapshot is unavailable");

@@ -85,6 +85,23 @@ public interface CanonicalWorldgenChunkRepository
     Optional<SnapshotRow> findSnapshotRow(@Param("worldId") long worldId,
             @Param("chunkX") int chunkX, @Param("chunkZ") int chunkZ);
 
+    /** Lane bookkeeping only: the three carrier blobs stay on disk for mask-only decisions. */
+    interface LaneMaskRow {
+        int getLaneClaimMask();
+        int getLaneAckMask();
+        int getLaneRejectedMask();
+    }
+
+    @Query("""
+            select c.laneClaimMask as laneClaimMask,
+                   c.laneAckMask as laneAckMask,
+                   c.laneRejectedMask as laneRejectedMask
+            from CanonicalWorldgenChunk c
+            where c.worldId = :worldId and c.chunkX = :chunkX and c.chunkZ = :chunkZ
+            """)
+    Optional<LaneMaskRow> findLaneMaskRow(@Param("worldId") long worldId,
+            @Param("chunkX") int chunkX, @Param("chunkZ") int chunkZ);
+
     Optional<CanonicalWorldgenChunk> findByWorldIdAndChunkXAndChunkZ(long worldId, int chunkX,
             int chunkZ);
     /**

@@ -350,19 +350,23 @@ public class FinalCarrierPersistenceService
         CanonicalWorldgenStore.Lane lane = CanonicalWorldgenStore.Lane.BEES;
         CanonicalWorldgenStore.LaneReceipt claim = canonical.claim(worldId, chunkX, chunkZ, lane);
         if (claim == null) {
-            CanonicalWorldgenStore.CanonicalChunkSnapshot snapshot = canonical.find(
-                    worldId, chunkX, chunkZ);
-            if (snapshot == null) return CanonicalBeeInstallResult.RETRY;
-            if ((snapshot.laneRejectedMask() & lane.mask()) != 0) {
+            // The unclaimed turn answers from lane bookkeeping alone; only the acknowledged row
+            // check needs the carrier, so the retry and rejection turns skip the blob read.
+            CanonicalWorldgenStore.LaneMasks masks = canonical.laneMasks(worldId, chunkX, chunkZ);
+            if (masks == null) return CanonicalBeeInstallResult.RETRY;
+            if ((masks.rejected() & lane.mask()) != 0) {
                 return existing != null && existing.getStatus()
                         == WorldCanonicalBeeInstallation.Status.REJECTED
                         ? CanonicalBeeInstallResult.REJECTED : CanonicalBeeInstallResult.RETRY;
             }
-            if ((snapshot.laneAckMask() & lane.mask()) == 0 || existing == null
+            if ((masks.ack() & lane.mask()) == 0 || existing == null
                     || existing.getStatus()
                     != WorldCanonicalBeeInstallation.Status.ACKNOWLEDGED) {
                 return CanonicalBeeInstallResult.RETRY;
             }
+            CanonicalWorldgenStore.CanonicalChunkSnapshot snapshot = canonical.find(
+                    worldId, chunkX, chunkZ);
+            if (snapshot == null) return CanonicalBeeInstallResult.RETRY;
             validateAcknowledgedBeeRow(existing, snapshot);
             return CanonicalBeeInstallResult.ALREADY_ACKNOWLEDGED;
         }
@@ -1026,6 +1030,16 @@ public class FinalCarrierPersistenceService
             int chunkZ, CanonicalWorldgenStore.Lane lane, String sourceFingerprint,
             NeutralFinalChunk.Sidecars exactPayload,
             WorldRuntime.FinalCarrierGameplayInstaller gameplayInstaller) {
+        // Lane bookkeeping decides RETRY/REJECTED on its own, and both answers are common while a
+        // chunk is still settling. Reading the masks first keeps those turns off the carrier blobs.
+        CanonicalWorldgenStore.LaneMasks masks = canonical.laneMasks(worldId, chunkX, chunkZ);
+        if (masks == null || (masks.rejected() & lane.mask()) != 0) {
+            return masks == null ? WorldRuntime.FinalCarrierInstallResult.RETRY
+                    : WorldRuntime.FinalCarrierInstallResult.REJECTED;
+        }
+        if ((masks.ack() & lane.mask()) == 0) {
+            return WorldRuntime.FinalCarrierInstallResult.RETRY;
+        }
         CanonicalWorldgenStore.CanonicalChunkSnapshot snapshot =
                 canonical.find(worldId, chunkX, chunkZ);
         if (snapshot == null || (snapshot.laneRejectedMask() & lane.mask()) != 0) {
