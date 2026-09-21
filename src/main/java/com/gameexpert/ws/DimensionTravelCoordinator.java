@@ -29,6 +29,8 @@ public class DimensionTravelCoordinator {
     private final WorldSessionLifecycle lifecycle;
     private final ObjectMapper mapper;
     private final Map<String, DimensionSession> connections = new ConcurrentHashMap<>();
+    /** How long a returning player waits for the previous connection of the same player to leave. */
+    private static final long REJOIN_GRACE_NANOS = TimeUnit.SECONDS.toNanos(5);
     private final Map<String, String> rootOwners = new ConcurrentHashMap<>();
     private final Map<String, Long> preparedTargets = new ConcurrentHashMap<>();
     private final java.util.Queue<WebSocketSession> closing = new ConcurrentLinkedQueue<>();
@@ -62,7 +64,7 @@ public class DimensionTravelCoordinator {
         long player = (Long) physical.getAttributes().get(ATTR_PLAYER_ID);
         if (travel.isChild(root)) throw new IllegalArgumentException("direct child entry forbidden");
         String claim = root + ":" + player;
-        if (rootOwners.putIfAbsent(claim, physical.getId()) != null) {
+        if (!claimRoot(claim, physical.getId())) {
             physical.close(new CloseStatus(4002));
             throw new IllegalStateException("root player already connected");
         }
@@ -77,6 +79,20 @@ public class DimensionTravelCoordinator {
             rootOwners.remove(claim, physical.getId());
             throw failure;
         }
+    }
+
+    /**
+     * A closed tab is cleaned up on the transfer worker, which saves the leaving player and frees
+     * this claim last. A reconnect that arrives first waits for that departure instead of being
+     * refused; a second live connection still holds the claim when the grace runs out.
+     */
+    private boolean claimRoot(String claim, String physicalId) throws InterruptedException {
+        long deadline = System.nanoTime() + REJOIN_GRACE_NANOS;
+        while (rootOwners.putIfAbsent(claim, physicalId) != null) {
+            if (System.nanoTime() - deadline >= 0) return false;
+            Thread.sleep(50);
+        }
+        return true;
     }
 
     public WebSocketSession current(WebSocketSession session) {
