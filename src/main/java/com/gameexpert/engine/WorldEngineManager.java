@@ -1361,6 +1361,8 @@ public class WorldEngineManager
         for (java.util.Map.Entry<Long, WorldRuntime> entry : List.copyOf(runtimes.entrySet())) {
             if (com.gameexpert.cluster.WorldAuthority.rootOf(entry.getKey()) != root) continue;
             entry.getValue().abandonClusterAuthority();
+            // The aborted runtime must never serve a later join; a recovered authority loads afresh.
+            runtimes.remove(entry.getKey(), entry.getValue());
             closeCanonicalPrefetcher(entry.getKey(), null);
             canonicalSources.remove(entry.getKey());
             canonicalSpawns.remove(entry.getKey());

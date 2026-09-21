@@ -80,4 +80,29 @@ class DimensionRejoinGraceTest {
         verify(duplicate).close(new CloseStatus(4002));
         assertTrue(waitedMillis >= 4_900 && waitedMillis < 8_000, "refused after " + waitedMillis + "ms");
     }
+
+    @Test
+    void reconnectKeepsWaitingWhileTheOldConnectionIsQueuedToLeave() throws Exception {
+        WebSocketSession closedTab = physical("queued-tab");
+        coordinator.open(closedTab);
+        // Leaves drain one at a time; a long queue must not turn a returning player into a duplicate.
+        @SuppressWarnings("unchecked")
+        java.util.Set<String> closingIds = (java.util.Set<String>)
+                org.springframework.test.util.ReflectionTestUtils.getField(coordinator, "closingIds");
+        closingIds.add("queued-tab");
+        WebSocketSession reconnect = physical("reconnect-behind-queue");
+
+        CompletableFuture<DimensionSession> opened = CompletableFuture.supplyAsync(() -> {
+            try { return coordinator.open(reconnect); }
+            catch (Exception failure) { throw new IllegalStateException(failure); }
+        });
+        Thread.sleep(6_000);
+        assertFalse(opened.isDone(), "a queued leave must keep the reconnect waiting past the short grace");
+
+        closingIds.remove("queued-tab");
+        coordinator.close(closedTab);
+
+        assertNotNull(opened.get(3, TimeUnit.SECONDS));
+        verify(reconnect, never()).close(any(CloseStatus.class));
+    }
 }

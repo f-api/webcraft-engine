@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.ContextClosedEvent;
 import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
@@ -39,6 +40,8 @@ public final class ClusterRuntime implements AutoCloseable {
     private static final String WIRE = "webcraft.cluster.wire";
     /** Close reasons meaning the resolved owner is gone or no longer accepts this generation. */
     private static final Set<String> OWNER_UNAVAILABLE = Set.of("ENGINE_OWNER_LOST", "WORLD_AUTHORITY_UNAVAILABLE");
+    /** Edges send a keepalive every second; three missed ones mean the edge server is gone. */
+    private static final long SILENT_EDGE_NANOS = Duration.ofSeconds(3).toNanos();
     private static final DefaultRedisScript<Long> PUSH = new DefaultRedisScript<>("""
         local n=string.len(ARGV[1])
         if redis.call('LLEN',KEYS[1])>=2048 or tonumber(redis.call('GET',KEYS[2]) or '0')+n>67108864 then return 0 end
@@ -98,6 +101,7 @@ public final class ClusterRuntime implements AutoCloseable {
         }
     }
     private static volatile ClusterRuntime active;
+    private static volatile ClusterRuntime draining;
     private static final ThreadLocal<Boolean> AUTHORITY_DISPATCH = new ThreadLocal<>();
     /** Internal control flow: a chat command from a retired dimension must not be saved or relayed. */
     static final class CommandCancelledException extends RuntimeException {
@@ -160,6 +164,20 @@ public final class ClusterRuntime implements AutoCloseable {
     public static ClusterRuntime current() {
         ClusterRuntime value=active;
         return value != null && value.started && !value.stopped.get() ? value : null;
+    }
+    /**
+     * Spring stops the Redis connection factory in the lifecycle phase that follows this event, so
+     * saying goodbye from {@code @PreDestroy} failed on every graceful stop: peers were never told,
+     * their players waited for health timeouts, and reconnects were refused. Leave while Redis is up.
+     */
+    @EventListener(ContextClosedEvent.class)
+    public void beforeShutdown(ContextClosedEvent event) {
+        if (event.getApplicationContext() == context) close();
+    }
+    /** A node that has started shutting down admits no new game connection. */
+    public static boolean refusesNewConnections() {
+        ClusterRuntime value=draining;
+        return value != null && value.stopped.get();
     }
     @EventListener(ApplicationReadyEvent.class)
     public synchronized void start() {
@@ -392,6 +410,20 @@ public final class ClusterRuntime implements AutoCloseable {
     public void closedPhysical(WebSocketSession session) {
         Edge edge=edgeOf(session); if (edge!=null) edge.terminate(CloseStatus.NORMAL);
     }
+    /**
+     * A player reconnecting while an older connection still holds their claim asks whether that
+     * connection's server went quiet. Edges send a keepalive every second, so three missed ones
+     * mean the server stopped or crashed; closing the connection now releases the claim instead
+     * of leaving the player refused until the health check notices.
+     */
+    public static void releaseSilentConnection(String wire) {
+        ClusterRuntime cluster=current();
+        if (cluster==null) return;
+        Actor actor=cluster.actors.get(wire);
+        if (actor!=null && System.nanoTime()-actor.lastSeen > SILENT_EDGE_NANOS) {
+            actor.terminate(new CloseStatus(1012, "ENGINE_SESSION_LOST"));
+        }
+    }
     public static boolean forwardFromEdge(WsMessageContext context, JsonNode message) {
         ClusterRuntime cluster=current();
         if (cluster==null || !(context.session() instanceof EdgeSession edge)) return false;
@@ -458,8 +490,13 @@ public final class ClusterRuntime implements AutoCloseable {
                     actor.terminate(new CloseStatus(1012, "ENGINE_SESSION_LOST"));
                 }
             }
-            for (long root : authority.retiredRoots()) {
-                if (abandoned.add(root)) engines.getObject().abandonClusterAuthority(root);
+            Set<Long> retiredRoots=authority.retiredRoots();
+            abandoned.retainAll(retiredRoots);
+            for (long root : retiredRoots) {
+                if (abandoned.add(root)) {
+                    engines.getObject().abandonClusterAuthority(root);
+                    authority.runtimeDiscarded(root);
+                }
             }
             long now=System.nanoTime(); tombstones.entrySet().removeIf(e -> e.getValue()<now);
         } catch (Exception failure) { fault(failure); }
@@ -471,6 +508,7 @@ public final class ClusterRuntime implements AutoCloseable {
     }
     @Override @jakarta.annotation.PreDestroy public void close() {
         if (!stopped.compareAndSet(false,true)) return;
+        draining=this;
         for (Edge edge : physicalEdges.values()) edge.terminate(new CloseStatus(1001, "SERVER_SHUTDOWN"));
         for (Actor actor : actors.values()) actor.terminate(new CloseStatus(1001, "SERVER_SHUTDOWN"));
         deletions.values().forEach(pending -> pending.result.completeExceptionally(new IllegalStateException("Server shutting down")));

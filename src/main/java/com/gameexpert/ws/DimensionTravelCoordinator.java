@@ -31,6 +31,8 @@ public class DimensionTravelCoordinator {
     private final Map<String, DimensionSession> connections = new ConcurrentHashMap<>();
     /** How long a returning player waits for the previous connection of the same player to leave. */
     private static final long REJOIN_GRACE_NANOS = TimeUnit.SECONDS.toNanos(5);
+    /** A queued leave always frees its claim; wait for it, but answer before the edge stops waiting to open. */
+    private static final long LEAVING_GRACE_NANOS = TimeUnit.SECONDS.toNanos(25);
     private final Map<String, String> rootOwners = new ConcurrentHashMap<>();
     private final Map<String, Long> preparedTargets = new ConcurrentHashMap<>();
     private final java.util.Queue<WebSocketSession> closing = new ConcurrentLinkedQueue<>();
@@ -84,12 +86,21 @@ public class DimensionTravelCoordinator {
     /**
      * A closed tab is cleaned up on the transfer worker, which saves the leaving player and frees
      * this claim last. A reconnect that arrives first waits for that departure instead of being
-     * refused; a second live connection still holds the claim when the grace runs out.
+     * refused. Leaves drain one at a time, so a claim whose holder is already queued keeps the
+     * reconnect waiting past the short grace; a holder whose server stopped sending keepalives is
+     * released at once. A second live connection still holds the claim when the grace runs out.
      */
     private boolean claimRoot(String claim, String physicalId) throws InterruptedException {
-        long deadline = System.nanoTime() + REJOIN_GRACE_NANOS;
-        while (rootOwners.putIfAbsent(claim, physicalId) != null) {
-            if (System.nanoTime() - deadline >= 0) return false;
+        long started = System.nanoTime();
+        String holder;
+        while ((holder = rootOwners.putIfAbsent(claim, physicalId)) != null) {
+            long waited = System.nanoTime() - started;
+            if (closingIds.contains(holder)) {
+                if (waited >= LEAVING_GRACE_NANOS) return false;
+            } else {
+                com.gameexpert.cluster.ClusterRuntime.releaseSilentConnection(holder);
+                if (waited >= REJOIN_GRACE_NANOS) return false;
+            }
             Thread.sleep(50);
         }
         return true;

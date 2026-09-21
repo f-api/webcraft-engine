@@ -108,15 +108,43 @@ class WorldAuthorityRenewalTest {
     }
 
     @Test
-    void retiredResolveDoesNotBorrowConnectionOrReinstallOwner() throws Exception {
+    void retiredResolveRoutesToALiveRemoteOwner() throws Exception {
         try (Fixture fixture = new Fixture()) {
             fixture.expire();
             fixture.renew();
-            clearInvocations(fixture.source);
+            java.sql.ResultSet lease = mock(java.sql.ResultSet.class);
+            when(fixture.statement.executeQuery()).thenReturn(lease);
+            when(lease.next()).thenReturn(true);
+            when(lease.getString(1)).thenReturn("other-node");
+            when(lease.getLong(2)).thenReturn(8L);
+            when(lease.getLong(3)).thenReturn(10_000_000L);
+            // Another node took the world over; this node still sends its players there.
+            assertEquals(new WorldAuthority.Owner(1, "other-node", 8), fixture.authority.resolve(1));
+            assertFalse(fixture.authority.owns(1));
+            verify(fixture.connection, never()).setAutoCommit(false);
+        }
+    }
+
+    @Test
+    void retiredResolveNeverReinstallsThisNode() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            fixture.expire();
+            fixture.renew();
+            java.sql.ResultSet lease = mock(java.sql.ResultSet.class);
+            when(fixture.statement.executeQuery()).thenReturn(lease);
+            when(lease.next()).thenReturn(true);
+            when(lease.getString(1)).thenReturn(ClusterIdentity.NODE);
+            when(lease.getLong(2)).thenReturn(7L);
+            when(lease.getLong(3)).thenReturn(-1L);
+            clearInvocations(fixture.connection);
             IllegalStateException failure = assertThrows(IllegalStateException.class,
                     () -> fixture.authority.resolve(1));
             assertEquals("WORLD_AUTHORITY_RETIRED", failure.getMessage());
-            verifyNoInteractions(fixture.source);
+            // Only the lock-free routing read ran: no fence, lock or ownership write.
+            verify(fixture.connection).prepareStatement(contains("FROM webcraft_world_lease WHERE world_id=?"));
+            verify(fixture.connection, never()).setAutoCommit(false);
+            verify(fixture.connection, never()).prepareStatement(contains("FOR UPDATE"));
+            verify(fixture.connection, never()).prepareStatement(startsWith("UPDATE"));
             assertFalse(fixture.authority.owns(1));
         }
     }

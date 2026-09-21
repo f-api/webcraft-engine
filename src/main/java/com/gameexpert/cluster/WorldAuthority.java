@@ -50,6 +50,10 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
     private final Environment environment;
     private final ConcurrentMap<Long, Held> held = new ConcurrentHashMap<>();
     private final Set<Long> retired = ConcurrentHashMap.newKeySet();
+    /** The ownership each retired root last held here, to tell whether anyone owned it since. */
+    private final ConcurrentMap<Long, Owner> lastHeld = new ConcurrentHashMap<>();
+    /** Retired roots whose in-memory runtime this node has already discarded. */
+    private final Set<Long> recoverable = ConcurrentHashMap.newKeySet();
     private final ConcurrentMap<Long, Long> roots = new ConcurrentHashMap<>();
     private final ScheduledExecutorService renewals = Executors.newSingleThreadScheduledExecutor(r -> {
         Thread t = new Thread(r, "cluster-world-lease"); t.setDaemon(true); return t;
@@ -100,7 +104,6 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
         if (!enabled) return new Owner(world, ClusterIdentity.NODE, 0);
         long root = rootFor(world);
         if (closed) throw new IllegalStateException("WORLD_AUTHORITY_CLOSED");
-        if (retired.contains(root)) throw new IllegalStateException("WORLD_AUTHORITY_RETIRED");
         Held known = held.get(root);
         if (known != null) {
             if (System.nanoTime() < known.deadline()) return known.owner();
@@ -119,6 +122,8 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                     }
                 }
             }
+            // A retired root still routes to a live owner elsewhere; only taking it back is refused.
+            if (retired.contains(root) && !recoverable.contains(root)) throw new RetiredRefusal();
             c.setAutoCommit(false);
             try {
                 try (PreparedStatement q = c.prepareStatement("INSERT INTO webcraft_world_authority"
@@ -156,9 +161,16 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                     }
                 }
                 if (!fenced.equals(owner)) throw new SQLException("World lease and fence disagree");
+                boolean recovering = false;
                 if (remainingMicros <= 0) {
                     if (retired.contains(root) || ClusterIdentity.NODE.equals(owner.node())) {
-                        retire(root); throw new SQLException("Expired incarnation cannot reacquire a live cache");
+                        // Taking a retired world back is safe only if nobody owned it since: the lease
+                        // still names this node's last incarnation, so writes this node buffered are the
+                        // newest ones and no other owner's changes can be overwritten by them.
+                        recovering = recoverable.contains(root) && owner.equals(lastHeld.get(root));
+                        if (!recovering) {
+                            retire(root); throw new SQLException("Expired incarnation cannot reacquire a live cache");
+                        }
                     }
                     owner = new Owner(root, ClusterIdentity.NODE, Math.addExact(owner.epoch(), 1));
                     try (PreparedStatement q = c.prepareStatement("UPDATE webcraft_world_authority SET"
@@ -174,6 +186,10 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                     remainingMicros = 15_000_000;
                 }
                 c.commit();
+                if (recovering) {
+                    recoverable.remove(root); lastHeld.remove(root); retired.remove(root);
+                    log.warn("World authority recovered: root={} node={} epoch={}", root, owner.node(), owner.epoch());
+                }
                 if (ClusterIdentity.NODE.equals(owner.node())) {
                     long safeNanos = Math.min(LOCAL_NANOS, remainingMicros * 1000 - Duration.ofSeconds(3).toNanos());
                     if (closed || retired.contains(root) || safeNanos <= 0
@@ -185,7 +201,14 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                 }
                 return owner;
             } catch (Exception failure) { c.rollback(); throw failure; }
+        } catch (RetiredRefusal refused) {
+            throw refused;
         } catch (Exception failure) { throw new IllegalStateException("Cannot resolve world ownership", failure); }
+    }
+
+    /** Refusing to take a retired root back is a routing answer, not a database failure. */
+    private static final class RetiredRefusal extends IllegalStateException {
+        RetiredRefusal() { super("WORLD_AUTHORITY_RETIRED"); }
     }
 
     public boolean owns(long world) {
@@ -271,7 +294,12 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
     private void retire(long root) {
         if (retired.add(root)) log.error("World authority retired: root={} node={}; runtime stopped, takeover fences prior writers",
                 root, ClusterIdentity.NODE);
-        held.remove(root);
+        Held prior = held.remove(root);
+        if (prior != null) lastHeld.put(root, prior.owner());
+    }
+    /** The node discarded the retired root's runtime; it may take the world back if nobody else did. */
+    public void runtimeDiscarded(long root) {
+        if (retired.contains(root) && lastHeld.containsKey(root)) recoverable.add(root);
     }
     @Override @jakarta.annotation.PreDestroy public void close() {
         closed = true;

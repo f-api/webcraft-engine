@@ -60,6 +60,9 @@ public class GameConnectionRuntime {
     }
 
     public WebSocketSession open(WebSocketSession session) throws Exception {
+        if (com.gameexpert.cluster.ClusterRuntime.refusesNewConnections()) {
+            throw new IllegalStateException("SERVER_SHUTTING_DOWN");
+        }
         com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
         if (cluster != null && !com.gameexpert.cluster.ClusterIdentity.isAuthority(session)) {
             return cluster.openPhysical(session);
@@ -166,11 +169,24 @@ public class GameConnectionRuntime {
             broadcaster.broadcastExcept(worldId, session,
                     new PlayerJoin(nickname));
         } catch (Exception exception) {
+            sessionLifecycle.release(session);
+            if (worldBeingDeleted(exception)) {
+                // 입장이 오는 사이 월드가 삭제됐다. 서버 오류(1011)로 닫으면 클라이언트가 없는 월드에
+                // 끝없이 재접속하므로, 핸드셰이크에서 없는 월드와 같은 4001로 닫는다.
+                log.info("삭제 중인 월드 입장 종료: world={}, nickname={}", worldId, nickname);
+                session.close(new CloseStatus(4001));
+                return;
+            }
             // 로그를 남기지 않으면 접속만 조용히 끊겨 부하 문제와 구별되지 않습니다.
             log.error("접속 처리 실패: world={}, nickname={}", worldId, nickname, exception);
-            sessionLifecycle.release(session);
             session.close(CloseStatus.SERVER_ERROR);
         }
+    }
+
+    /** 입장 경로의 WORLD_IN_USE는 그 월드의 삭제가 이미 시작됐다는 뜻이다. */
+    private static boolean worldBeingDeleted(Exception exception) {
+        return exception instanceof com.gameexpert.common.ConflictException conflict
+                && "WORLD_IN_USE".equals(conflict.getError());
     }
 
     public void receive(WebSocketSession session, TextMessage message,
