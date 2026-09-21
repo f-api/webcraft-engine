@@ -3384,6 +3384,14 @@ public final class WorldTickLoop {
             rollbackEdit(player, edit, current);
             return;
         }
+        if (edit.kind() == PlayerAction.EditKind.PLACE
+                && placementMeetsAnotherPlayer(player, Short.toUnsignedInt(edit.blockType()),
+                        edit.x(), edit.y(), edit.z())) {
+            // A collidable block may not enter another player's body; otherwise one player can
+            // entomb another. Nothing is consumed and the placer's prediction is rolled back.
+            rollbackEdit(player, edit, current);
+            return;
+        }
         // 이 플레이어의 컨테이너 정산이 인벤토리를 리스한 동안에는 소비(설치)도 적립(파괴)도
         // 막힌다. 그 창에서 온 편집을 즉시 거절하면 컨테이너류가 아닌 블록도 클라에서 사라져
         // 보인다. 컨테이너 관문과 같은 큐·상한·마감으로 보류했다가 리스가 풀리면 다시 태운다.
@@ -10277,6 +10285,21 @@ public final class WorldTickLoop {
     /** Test/diagnostic view of the live primed TNT rows. */
     List<com.gameexpert.tnt.dto.PrimedTntSnapshot> primedTntSnapshots() {
         return primedTnt.persistenceSnapshot();
+    }
+
+    /**
+     * Whether a collidable block placed at the cell would meet another living player's body. The
+     * placer is left out: its position reaches the server a little late while it pillars upward,
+     * and the client already refuses placements inside its own body.
+     */
+    private boolean placementMeetsAnotherPlayer(PlayerTickState placer, int blockType, int x, int y, int z) {
+        if (!isSolid(blockType)) return false;
+        boolean twoTall = Blocks.isDoor(blockType);
+        for (PlayerTickState other : rt.players().values()) {
+            if (other == placer || other.isDead()) continue;
+            if (playerOccupiesCell(other, x, y, z) || twoTall && playerOccupiesCell(other, x, y + 1, z)) return true;
+        }
+        return false;
     }
 
     /** Whether the player's box (0.6 wide, 1.8 tall or 1.5 crouching) meets the cell's cube. */
