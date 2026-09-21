@@ -47,6 +47,13 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
         }
     }
     private final DataSource dataSource;
+    /**
+     * Lease renewal borrows from its own small pool. When a burst of game writes held every shared
+     * connection, renewals queued behind them, missed the 12 s local deadline, and the node dropped
+     * every world it owned.
+     */
+    private volatile DataSource renewalSource;
+    private volatile AutoCloseable renewalPool;
     private final Environment environment;
     private final ConcurrentMap<Long, Held> held = new ConcurrentHashMap<>();
     private final Set<Long> retired = ConcurrentHashMap.newKeySet();
@@ -82,6 +89,7 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
             SqlWriteFences.install(c);
             enabled = true;
             active = this;
+            openRenewalPool();
             renewals.scheduleWithFixedDelay(this::renew, 2, 2, TimeUnit.SECONDS);
             log.info("Game authority enabled: node={} namespace={} (separate from student chat)",
                     ClusterIdentity.NODE, namespace);
@@ -250,7 +258,7 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
             long started = System.nanoTime();
             if (!mayRenew(root, prior, started)) { retire(root); return; }
             SQLException rolledBack = null;
-            try (Connection c = dataSource.getConnection(); PreparedStatement q = c.prepareStatement(
+            try (Connection c = renewalConnection(); PreparedStatement q = c.prepareStatement(
                     "UPDATE webcraft_world_lease SET expires_at=TIMESTAMPADD(SECOND,15,UTC_TIMESTAMP(6))"
                             + " WHERE world_id=? AND node_id=? AND epoch=? AND expires_at>UTC_TIMESTAMP(6)")) {
                 q.setQueryTimeout(3);
@@ -301,9 +309,53 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
     public void runtimeDiscarded(long root) {
         if (retired.contains(root) && lastHeld.containsKey(root)) recoverable.add(root);
     }
+    private Connection renewalConnection() throws SQLException {
+        DataSource source = renewalSource;
+        return (source == null ? dataSource : source).getConnection();
+    }
+
+    /**
+     * Copies the shared Hikari pool's connection settings into a two-connection pool used only by
+     * renewals (they run one at a time on a single thread). Connections carry the same fence tag as
+     * every other engine connection. Without a Hikari pool, renewals keep using the shared source.
+     */
+    private void openRenewalPool() {
+        renewalSource = dataSource;
+        try {
+            if (!dataSource.isWrapperFor(com.zaxxer.hikari.HikariDataSource.class)) return;
+            com.zaxxer.hikari.HikariDataSource shared = dataSource.unwrap(com.zaxxer.hikari.HikariDataSource.class);
+            if (shared.getJdbcUrl() == null) return;
+            com.zaxxer.hikari.HikariConfig config = new com.zaxxer.hikari.HikariConfig();
+            config.setPoolName("webcraft-lease");
+            config.setJdbcUrl(shared.getJdbcUrl());
+            config.setUsername(shared.getUsername());
+            config.setPassword(shared.getPassword());
+            if (shared.getDriverClassName() != null) config.setDriverClassName(shared.getDriverClassName());
+            config.setDataSourceProperties(shared.getDataSourceProperties());
+            config.setMaximumPoolSize(2);
+            config.setMinimumIdle(1);
+            // Answer inside the 12 s local lease window instead of waiting out a shared-pool queue.
+            config.setConnectionTimeout(8_000);
+            config.setValidationTimeout(2_000);
+            config.setInitializationFailTimeout(-1);
+            com.zaxxer.hikari.HikariDataSource pool = new com.zaxxer.hikari.HikariDataSource(config);
+            renewalPool = pool;
+            renewalSource = new FencedDataSourcePostProcessor.TaggedDataSource(pool);
+        } catch (SQLException | RuntimeException failure) {
+            log.warn("Dedicated lease connections unavailable; renewing through the shared pool", failure);
+            renewalSource = dataSource;
+        }
+    }
+
     @Override @jakarta.annotation.PreDestroy public void close() {
         closed = true;
         renewals.shutdownNow();
+        AutoCloseable pool = renewalPool;
+        renewalPool = null;
+        if (pool != null) {
+            try { pool.close(); }
+            catch (Exception failure) { log.debug("Lease connection pool close failed", failure); }
+        }
         // Never release early while another persistence worker could still be draining.
         // The successor waits for expiration AND the database transaction row lock.
     }

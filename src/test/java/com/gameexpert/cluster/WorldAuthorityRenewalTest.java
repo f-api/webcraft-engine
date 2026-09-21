@@ -149,6 +149,71 @@ class WorldAuthorityRenewalTest {
         }
     }
 
+    @Test
+    void renewalKeepsTheWorldWhenGameTrafficHoldsEverySharedConnection() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            // The shared pool is exhausted by game writes; only the lease pool can answer.
+            when(fixture.source.getConnection()).thenThrow(new SQLException("HikariPool-1 - Connection is not available"));
+            DataSource leases = mock(DataSource.class);
+            Connection leaseConnection = mock(Connection.class);
+            PreparedStatement renewal = mock(PreparedStatement.class);
+            when(leases.getConnection()).thenReturn(leaseConnection);
+            when(leaseConnection.prepareStatement(anyString())).thenReturn(renewal);
+            when(renewal.executeUpdate()).thenReturn(1);
+            Fixture.field("renewalSource").set(fixture.authority, leases);
+
+            fixture.renew();
+
+            assertTrue(fixture.authority.owns(1));
+            assertTrue(fixture.authority.retiredRoots().isEmpty());
+            verify(renewal).executeUpdate();
+        }
+    }
+
+    @Test
+    void renewalPoolCopiesTheSharedHikariSettingsAndStaysSmall() throws Exception {
+        // The pool connects lazily; a stand-in driver lets it resolve the URL without a database.
+        java.sql.Driver driver = mock(java.sql.Driver.class);
+        when(driver.acceptsURL(anyString())).thenReturn(true);
+        java.sql.DriverManager.registerDriver(driver);
+        com.zaxxer.hikari.HikariDataSource shared = new com.zaxxer.hikari.HikariDataSource();
+        shared.setJdbcUrl("jdbc:mysql://mysql:3306/webcraft");
+        shared.setUsername("root");
+        shared.setPassword("secret");
+        WorldAuthority authority = new WorldAuthority(
+                new FencedDataSourcePostProcessor.TaggedDataSource(shared), mock(Environment.class));
+        Method open = WorldAuthority.class.getDeclaredMethod("openRenewalPool");
+        open.setAccessible(true);
+        open.invoke(authority);
+        try {
+            Object source = Fixture.field("renewalSource").get(authority);
+            assertInstanceOf(FencedDataSourcePostProcessor.TaggedDataSource.class, source);
+            com.zaxxer.hikari.HikariDataSource pool = (com.zaxxer.hikari.HikariDataSource) Fixture.field("renewalPool").get(authority);
+            assertNotSame(shared, pool);
+            assertEquals("webcraft-lease", pool.getPoolName());
+            assertEquals(2, pool.getMaximumPoolSize());
+            assertEquals("jdbc:mysql://mysql:3306/webcraft", pool.getJdbcUrl());
+            assertEquals("root", pool.getUsername());
+            assertEquals("secret", pool.getPassword());
+        } finally {
+            authority.close();
+            shared.close();
+            java.sql.DriverManager.deregisterDriver(driver);
+        }
+        assertNull(Fixture.field("renewalPool").get(authority));
+    }
+
+    @Test
+    void renewalFallsBackToTheSharedSourceWithoutHikari() throws Exception {
+        try (Fixture fixture = new Fixture()) {
+            Method open = WorldAuthority.class.getDeclaredMethod("openRenewalPool");
+            open.setAccessible(true);
+            open.invoke(fixture.authority);
+            assertSame(fixture.source, Fixture.field("renewalSource").get(fixture.authority));
+            assertNull(Fixture.field("renewalPool").get(fixture.authority));
+        }
+    }
+
     private static SQLException deadlock() {
         return new SQLException("Deadlock found; transaction rolled back", "40001", 1213);
     }
