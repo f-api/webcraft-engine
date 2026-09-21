@@ -2929,15 +2929,31 @@ public final class PlayerInventory {
         return selectedSlot;
     }
 
+    /** 정산 리스 중에 받은 선택 슬롯. 리스가 풀리면 적용한다(-1: 없음). */
+    private int deferredSelection = -1;
+
     /** 영속 대상(itemType/count/durability) 변경 카운터. 주기 저장 dirty 판정용(값이 바뀔 때마다 증가). */
     public synchronized long revision() {
         return revision;
     }
 
-    /** 선택 슬롯 변경(핫바 0~8 범위 밖은 무시). 실제 변경만 영속 revision 을 올린다. */
+    /**
+     * 선택 슬롯 변경(핫바 0~8 범위 밖은 무시). 실제 변경만 영속 revision 을 올린다.
+     * 정산 리스 중에는 revision을 바꿀 수 없으므로 버리지 않고 기억했다가 리스가 풀릴 때 적용한다.
+     * 선택은 바꿀 때 한 번만 오기 때문에, 버리면 클라와 서버의 손 아이템이 다음 선택까지 어긋난다.
+     */
     public synchronized void select(int slot) {
-        if (settlementMutationBlocked()) return;
-        if (slot < 0 || slot >= HOTBAR_SLOTS || selectedSlot == slot) return;
+        if (slot < 0 || slot >= HOTBAR_SLOTS) return;
+        if (settlementMutationBlocked()) {
+            deferredSelection = slot;
+            return;
+        }
+        deferredSelection = -1;
+        applySelection(slot);
+    }
+
+    private void applySelection(int slot) {
+        if (selectedSlot == slot) return;
         preflightRevisionCapacity();
         this.selectedSlot = slot;
         revision = Math.incrementExact(revision);
@@ -8038,6 +8054,11 @@ public final class PlayerInventory {
         settlementLeaseRevision = -1L;
         settlementLeaseNonce = 0L;
         settlementLeaseSourceDigest = null;
+        if (deferredSelection >= 0) {
+            int slot = deferredSelection;
+            deferredSelection = -1;
+            applySelection(slot);
+        }
     }
 
     /** 현재 완전 상태를 포착하고 비동기 정산이 끝날 때까지 일반 변이를 잠급니다. */
