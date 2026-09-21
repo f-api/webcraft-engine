@@ -11429,7 +11429,7 @@ public final class WorldRuntime {
             operation.reject();
             throw failure;
         }
-        if (!ensureBlockCheckpointBeforeSettlement(spawnBatch != null)) {
+        if (!ensureBlockCheckpointBeforeSettlement()) {
             operation.audit("submit-refused", "block-checkpoint");
             completeGroundSettlement(command.committedGroundRevision(), false);
             return false;
@@ -11503,15 +11503,16 @@ public final class WorldRuntime {
      * Orders the durable block change ahead of the settlement that credits its items. Without this
      * boundary an owner crash between the two writes restores a mined block whose drop was already
      * committed, which duplicates the item.
+     *
+     * Never waits. Settlement runs under this runtime's monitor, and a writer task queued ahead of
+     * the checkpoint installs its completion under that same monitor, so waiting here stalls the
+     * writer for every world on the node. When the previous checkpoint is still in flight the
+     * settlement is refused; the tick retries it, and a blocking action boundary waits outside the
+     * monitor before retrying.
      */
-    private boolean ensureBlockCheckpointBeforeSettlement(boolean mayWait) {
+    private boolean ensureBlockCheckpointBeforeSettlement() {
         com.gameexpert.block.persistence.BlockDiffBuffer buffer = ctx.blockDiffBuffer();
         if (buffer == null || !buffer.hasPending(worldId)) return true;
-        if (tickLoop.submitBlockCheckpointForSettlement()) return true;
-        if (!mayWait) return false;
-        // The spawn boundary already waits for writer tasks elsewhere; the in-flight checkpoint
-        // completes there and this retry then submits the newer cells.
-        awaitGroundWriterTasks();
         return tickLoop.submitBlockCheckpointForSettlement();
     }
 
@@ -11700,6 +11701,7 @@ public final class WorldRuntime {
         if (!hasPendingGroundSpawns()) return;
         awaitGroundWriterTasks();
         drainPersistenceCompletions();
+        int unsettled = 0;
         while (hasPendingGroundSpawns()) {
             settlePendingGroundSpawns();
             if (!hasPendingGroundSpawns()) break;
@@ -11709,7 +11711,9 @@ public final class WorldRuntime {
             }
             awaitGroundWriterTasks();
             drainPersistenceCompletions();
-            if (pendingGroundSpawnBatch == submitted) {
+            // A settlement refused behind an in-flight block checkpoint is retried once the writer
+            // has committed that checkpoint; only a batch that keeps failing blocks the action.
+            if (pendingGroundSpawnBatch == submitted && ++unsettled > 3) {
                 throw new IllegalStateException("ground spawn settlement did not commit before action");
             }
         }
