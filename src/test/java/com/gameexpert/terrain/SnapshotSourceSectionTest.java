@@ -62,6 +62,15 @@ class SnapshotSourceSectionTest {
             for (byte state : states) noStates &= state == 0;
             assertEquals(noStates, source.sectionHasNoStates(section), "states flag " + section);
         }
+        boolean[] present = new boolean[Blocks.BLOCK_ID_TABLE_CAPACITY];
+        for (short id : fullTypes) present[Short.toUnsignedInt(id)] = true;
+        for (int id = 0; id < present.length; id++) {
+            if (present[id]) assertTrue(source.mayContain(id), "present id " + id);
+        }
+        assertFalse(source.mayContain(Blocks.BLOCK_ID_TABLE_CAPACITY - 1));
+        assertTrue(source.mayContain(42));
+        assertTrue(source.mayContain(43));
+
         assertNull(source.unchangedSectionTypes(2));
         assertNull(source.unchangedSectionTypes(5));
         assertNotNull(source.unchangedSectionTypes(9));

@@ -45,7 +45,7 @@ public interface MobWorldView {
 
     default void forBlockCollisionBoxes(int x, int y, int z, BuildingBlockRules.CollisionBoxVisitor visitor) {
         int id = getBlock(x,y,z) & 0xffff;
-        BuildingBlockRules.forCollisionBoxes(id, blockState(x,y,z,id), x,z,visitor);
+        BuildingBlockRules.forCollisionBoxes(id, BuildingBlockRules.collisionIgnoresState(id) ? 0 : blockState(x,y,z,id), x,z,visitor);
     }
 
     /** State-aware water volume; production also resolves immutable carrier waterlogging. */
@@ -227,6 +227,10 @@ public interface MobWorldView {
      * 햇빛 연소용 sky light 근사. 열린 칼럼은 15이고, 공기 경로를 따라 한 칸마다 1씩
      * 감쇠한다. 연소 임계값이 12라서 최대 세 칸만 탐색하면 충분하다.
      */
+    default boolean sunlightAbove(int x, int y, int z, int threshold) {
+        return sunlightLevel(x, y, z) > threshold;
+    }
+
     default int sunlightLevel(int x, int y, int z) {
         if (WorldClock.isNight(worldTime()) || isSolid(getBlock(x, y, z))) return 0;
         if (openToSky(x, y, z)) return 15;

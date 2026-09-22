@@ -15978,7 +15978,9 @@ public final class WorldTickLoop {
                         chunkX <= Math.floorDiv(maxX, Blocks.CHUNK_X); chunkX++) {
                     TerrainAccessor.SnapshotSource source =
                             rt.accessor().snapshotSource(chunkX, chunkZ);
-                    if (source == null) continue;
+                    // Most chunks near a player hold no potent sulfur at all; the stored palettes answer that
+                    // without reading a cell, so the cube scan only walks chunks that can contain a vent.
+                    if (source == null || !source.mayContain(Blocks.POTENT_SULFUR)) continue;
                     int worldX0 = chunkX * Blocks.CHUNK_X;
                     int worldZ0 = chunkZ * Blocks.CHUNK_X;
                     for (int y = minY; y <= maxY; y++) {
@@ -16242,7 +16244,7 @@ public final class WorldTickLoop {
     void forRedstoneCollisionBoxes(int x, int y, int z, BuildingBlockRules.CollisionBoxVisitor visitor) {
         int id = residentBlockType(rt.accessor(), x, y, z);
         if (id < 0) { visitor.visit(0,0,0,1,1,1); return; }
-        BuildingBlockRules.forCollisionBoxes(id, rt.blockState(x,y,z,id), x,z,visitor);
+        BuildingBlockRules.forCollisionBoxes(id, BuildingBlockRules.collisionIgnoresState(id) ? 0 : rt.blockState(x,y,z,id), x,z,visitor);
         redstone.engine().forMovingCollisionBoxes(x,y,z,visitor);
     }
 
@@ -16325,7 +16327,7 @@ public final class WorldTickLoop {
                 sign * Math.min(amount, Math.max(0, penetration + .01)), (x,y,z,visitor) -> {
                     int id = residentBlockType(rt.accessor(),x,y,z);
                     if (id == UNAVAILABLE_BLOCK) { visitor.visit(0,0,0,1,1,1); return; }
-                    BuildingBlockRules.forCollisionBoxes(id,rt.blockStates().get(x,y,z,id),x,z,visitor);
+                    BuildingBlockRules.forCollisionBoxes(id,BuildingBlockRules.collisionIgnoresState(id)?0:rt.blockStates().get(x,y,z,id),x,z,visitor);
                 }));
         };
         for (PlayerTickState p : rt.players().values()) {

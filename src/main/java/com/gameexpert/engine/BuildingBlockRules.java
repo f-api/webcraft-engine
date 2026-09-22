@@ -391,6 +391,18 @@ public final class BuildingBlockRules {
     }
 
     public static boolean isSlab(int id) {
+        // Light and collision ask this per cell; the definition below is a long comparison chain.
+        return id >= 0 && id < SlabTable.IS_SLAB.length ? SlabTable.IS_SLAB[id] : isSlabById(id);
+    }
+
+    private static final class SlabTable {
+        private static final boolean[] IS_SLAB = new boolean[Blocks.BLOCK_ID_TABLE_CAPACITY];
+        static {
+            for (int id = 0; id < IS_SLAB.length; id++) IS_SLAB[id] = isSlabById(id);
+        }
+    }
+
+    private static boolean isSlabById(int id) {
         // 목재 반 블록은 여덟 수종 표 밖(창백한 참나무 1498 · 포플러 1551)이 있어 연속 구간
         // 열거로는 새지만, 정본 집합은 Blocks.isWoodSlab 하나뿐이다 — 그 술어에서 파생한다.
         return Blocks.isWoodSlab(id) || id == Blocks.COBBLE_SLAB
@@ -1024,6 +1036,45 @@ public final class BuildingBlockRules {
             double z = DecorativeCollisionShapes.bambooOffsetZ(blockX, blockZ);
             visitor.visit(6.5 / 16 + x, 0, 6.5 / 16 + z, 9.5 / 16 + x, 1, 9.5 / 16 + z);
         } else forCollisionBoxes(id, state, visitor);
+    }
+
+    /** Per block ID: 0 not yet known, 1 collision boxes are the same for every state, 2 they depend on it. */
+    private static final byte[] COLLISION_STATE_FREE = new byte[65536];
+
+    /**
+     * True when {@link #forCollisionBoxes} yields the same boxes for all 256 states of {@code id}, so a caller
+     * may skip the block-state lookup (each one walks the carrier projection) and pass state 0. Decided once
+     * per ID by comparing every state's boxes; any exception counts as state-dependent.
+     */
+    public static boolean collisionIgnoresState(int id) {
+        if (id < 0 || id >= COLLISION_STATE_FREE.length) return false;
+        byte known = COLLISION_STATE_FREE[id];
+        if (known == 0) {
+            known = collisionBoxesAgreeForAllStates(id) ? (byte) 1 : (byte) 2;
+            COLLISION_STATE_FREE[id] = known;
+        }
+        return known == 1;
+    }
+
+    private static boolean collisionBoxesAgreeForAllStates(int id) {
+        try {
+            java.util.List<Double> first = collisionBoxList(id, 0);
+            for (int state = 1; state < 256; state++) {
+                if (!first.equals(collisionBoxList(id, state))) return false;
+            }
+            return true;
+        } catch (RuntimeException unknownState) {
+            return false;
+        }
+    }
+
+    private static java.util.List<Double> collisionBoxList(int id, int state) {
+        java.util.List<Double> boxes = new java.util.ArrayList<>();
+        forCollisionBoxes(id, state, (minX, minY, minZ, maxX, maxY, maxZ) -> {
+            boxes.add(minX); boxes.add(minY); boxes.add(minZ);
+            boxes.add(maxX); boxes.add(maxY); boxes.add(maxZ);
+        });
+        return boxes;
     }
 
     /** 엔티티 스윕이 소비하는 실제 로컬 AABB들. 비충돌 셀은 visitor를 호출하지 않는다. */

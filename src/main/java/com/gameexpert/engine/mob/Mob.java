@@ -3519,7 +3519,7 @@ public abstract class Mob {
             return;
         }
 
-        if (burnsInSun && world.sunlightLevel(bx, headY, bz) > 11) {
+        if (burnsInSun && world.sunlightAbove(bx, headY, bz, 11)) {
             if (equippedItem(ArmorSlot.HELMET) == Blocks.AIR) {
                 fireTicks = burningTicksAfterFireProtection(SUN_FIRE_TICKS);
             } else {

@@ -92,7 +92,7 @@ public final class TrialVisualClip {
         int id = block & 0xffff;
         if (id == Blocks.AIR) return false;
         boolean[] any = {false};
-        BuildingBlockRules.forCollisionBoxes(id, world.blockState(x, y, z, id), x, z,
+        BuildingBlockRules.forCollisionBoxes(id, BuildingBlockRules.collisionIgnoresState(id) ? 0 : world.blockState(x, y, z, id), x, z,
                 (x0, y0, z0, x1, y1, z1) -> any[0] = true);
         return any[0];
     }

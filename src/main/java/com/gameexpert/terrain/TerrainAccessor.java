@@ -437,6 +437,8 @@ public final class TerrainAccessor {
         private final int chunkX;
         private final int chunkZ;
         private final PalettedBlocks generatedBlocks;
+        /** Lazily built block-ID membership of this immutable source; see {@link #mayContain}. */
+        private volatile long[] presentBlockIds;
         private final ReplayableChunkPatch replayablePatch;
         private final int[] overrideKeys;
         private final short[] overrideTypes;
@@ -488,6 +490,34 @@ public final class TerrainAccessor {
 
         public long serial() {
             return serial;
+        }
+
+        /**
+         * False when no cell of this chunk holds {@code blockId}. Scans of a whole neighbourhood use it to skip
+         * a chunk without reading its 98,304 cells; the answer comes from the stored palettes plus the patch and
+         * override cells layered on them, so a true answer may still be a superset.
+         */
+        public boolean mayContain(int blockId) {
+            if (blockId < 0 || blockId >= Blocks.BLOCK_ID_TABLE_CAPACITY) return true;
+            long[] present = presentBlockIds;
+            if (present == null) {
+                present = new long[(Blocks.BLOCK_ID_TABLE_CAPACITY + 63) >>> 6];
+                long[] bits = present;
+                generatedBlocks.collectBlockIds(id -> {
+                    if (id < Blocks.BLOCK_ID_TABLE_CAPACITY) bits[id >>> 6] |= 1L << id;
+                });
+                for (int ordinal = 0; ordinal < replayablePatch.size(); ordinal++) {
+                    int id = replayablePatch.blockTypeAtOrdinal(ordinal);
+                    if (id >= 0 && id < Blocks.BLOCK_ID_TABLE_CAPACITY) bits[id >>> 6] |= 1L << id;
+                }
+                for (int slot = 0; slot < overrideKeys.length; slot++) {
+                    if (overrideKeys[slot] == 0) continue;
+                    int id = Short.toUnsignedInt(overrideTypes[slot]);
+                    if (id < Blocks.BLOCK_ID_TABLE_CAPACITY) bits[id >>> 6] |= 1L << id;
+                }
+                presentBlockIds = present;
+            }
+            return (present[blockId >>> 6] & (1L << blockId)) != 0;
         }
 
         public int chunkX() {
@@ -767,7 +797,9 @@ public final class TerrainAccessor {
     private Set<Long> simulationChunks = Set.of();
     // Snapshot senders receive one immutable source reference. Owner mutations accumulate in the sparse map
     // and snapshotSource publishes one frozen replacement, never exposing mutable overlay/LRU state to a worker.
-    private final Map<Long, SnapshotSource> snapshotSources = new HashMap<>(1024);
+    // Primitive keys: a chunk key's Long.hashCode is x ^ z, so a boxed HashMap put every diagonal of chunks in
+    // one bin and walked tree nodes on the hottest per-block lookup.
+    private final LongObjectOpenHashMap<SnapshotSource> snapshotSources = new LongObjectOpenHashMap<>(1024);
     /** Large deterministic geology/vegetation output, stored once per chunk instead of per-cell object graphs. */
     /** 상주 블록 조회의 매 셀 키 오토박싱을 피하는 자연 패치 인덱스. */
     private final LongObjectOpenHashMap<ReplayableChunkPatch> replayablePatches =

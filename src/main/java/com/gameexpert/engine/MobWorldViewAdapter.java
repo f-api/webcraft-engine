@@ -374,6 +374,11 @@ final class MobWorldViewAdapter implements MobWorldView {
     }
 
     @Override
+    public boolean sunlightAbove(int x, int y, int z, int threshold) {
+        return lightEngine.sunlightAbove(x, y, z, clock.worldTime(), threshold);
+    }
+
+    @Override
     public boolean isRainingAt(int x, int y, int z) {
         return weather.isRaining() && openToSky(x, y, z);
     }

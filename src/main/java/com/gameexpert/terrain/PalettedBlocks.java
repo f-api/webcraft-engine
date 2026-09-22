@@ -118,6 +118,20 @@ public final class PalettedBlocks {
         return blocks;
     }
 
+    /** Adds every block ID this chunk stores to {@code target} (a superset is never produced). */
+    public void collectBlockIds(java.util.function.IntConsumer target) {
+        for (int section = 0; section < SECTION_COUNT; section++) {
+            short[] plain = raw[section];
+            if (plain != null) {
+                for (short id : plain) target.accept(Short.toUnsignedInt(id));
+            } else if (palettes[section] != null) {
+                for (short id : palettes[section]) target.accept(Short.toUnsignedInt(id));
+            } else {
+                target.accept(Short.toUnsignedInt(uniform[section]));
+            }
+        }
+    }
+
     /** The block of a single-block section, or -1 when the section holds more than one block. */
     public int uniformBlock(int section) {
         return words[section] == null && raw[section] == null ? Short.toUnsignedInt(uniform[section]) : -1;

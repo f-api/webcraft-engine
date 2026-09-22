@@ -194,18 +194,37 @@ final class MobLightEngine {
         return Math.max(0, rawSkyLight(x, y, z) - skyDarken(worldTime));
     }
 
+    /**
+     * {@code sunlightLevel(...) > threshold} without the full radius-15 search: a sky source at path distance d
+     * gives 15 - d, so a level above the threshold can only come from within 14 - threshold cells. The bounded
+     * search finds exactly those sources, so the answer is the same.
+     */
+    boolean sunlightAbove(int x, int y, int z, long worldTime, int threshold) {
+        if (worldTime >= 6_000) return 0 > threshold;
+        int needed = threshold + 1 + skyDarken(worldTime);
+        if (needed <= 0) return true;
+        if (needed > 15) return false;
+        return propagatedLevel(x, y, z, true, false, 0, 15 - needed) >= needed;
+    }
+
     private static int skyDarken(long worldTime) {
         return worldTime >= 6_000 ? 11 : 0;
     }
 
     private int propagatedLevel(int originX, int originY, int originZ,
                                 boolean includeSky, boolean includeBlocks, int skyDarken) {
+        return propagatedLevel(originX, originY, originZ, includeSky, includeBlocks, skyDarken, RADIUS);
+    }
+
+    private int propagatedLevel(int originX, int originY, int originZ,
+                                boolean includeSky, boolean includeBlocks, int skyDarken, int maxDistance) {
         candidateLightQueries++;
         prepareSources(originX, originZ);
         int centerSourceIndex = sourceIndex(originX, originZ);
         TerrainAccessor.SnapshotSource centerSource = centerSourceIndex < 0
                 ? null : querySources[centerSourceIndex];
-        int memoMode = (includeSky ? 1 : 0) | (includeBlocks ? 2 : 0) | (skyDarken << 2);
+        int memoMode = (includeSky ? 1 : 0) | (includeBlocks ? 2 : 0) | (skyDarken << 2)
+                | (maxDistance == RADIUS ? 0 : (maxDistance + 1) << 6);
         long originRevision = originDependencyRevision(originX, originZ);
         int memoized = lightMemo.get(originX, originY, originZ, memoMode,
                 centerSource, originRevision);
@@ -247,7 +266,7 @@ final class MobLightEngine {
             int dz = rest % SIDE - RADIUS;
             int dy = rest / SIDE - RADIUS;
             int distance = Byte.toUnsignedInt(queueDistance[queueIndex]);
-            if (distance > RADIUS) continue;
+            if (distance > maxDistance) continue;
             int x = originX + dx;
             int y = originY + dy;
             int z = originZ + dz;
@@ -264,7 +283,7 @@ final class MobLightEngine {
                 bestSky = Math.max(bestSky, 15 - distance);
             }
             int best = Math.max(bestBlock, Math.max(0, bestSky - skyDarken));
-            if (best >= 15 || distance == RADIUS) continue;
+            if (best >= 15 || distance >= maxDistance) continue;
 
             int nextDistance = distance + 1;
             if (!faceOccludes(id, state, blockAt(x + 1, y, z),

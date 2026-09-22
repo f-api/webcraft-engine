@@ -89,7 +89,7 @@ final class ItemEntitySystem {
         int block(int x, int y, int z);
         default int state(int x, int y, int z, int block) { return 0; }
         default void boxes(int x,int y,int z,BuildingBlockRules.CollisionBoxVisitor visitor) {
-            int id=block(x,y,z); BuildingBlockRules.forCollisionBoxes(id,state(x,y,z,id),x,z,visitor);
+            int id=block(x,y,z); BuildingBlockRules.forCollisionBoxes(id,BuildingBlockRules.collisionIgnoresState(id)?0:state(x,y,z,id),x,z,visitor);
         }
     }
 

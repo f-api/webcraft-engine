@@ -160,6 +160,18 @@ public final class Fluids {
 
     /** 공기·유체·비고체 장식·통과 구조물이 아니면 solid(유체가 통과 못 함). */
     public static boolean isSolid(int id) {
+        // Light, collision and surface scans ask this per cell; the rule below walks several shape tables.
+        return id >= 0 && id < SolidTable.IS_SOLID.length ? SolidTable.IS_SOLID[id] : isSolidById(id);
+    }
+
+    private static final class SolidTable {
+        private static final boolean[] IS_SOLID = new boolean[com.gameexpert.terrain.Blocks.BLOCK_ID_TABLE_CAPACITY];
+        static {
+            for (int id = 0; id < IS_SOLID.length; id++) IS_SOLID[id] = isSolidById(id);
+        }
+    }
+
+    private static boolean isSolidById(int id) {
         if (com.gameexpert.engine.redstone.RedstoneShapes.has(id) && !com.gameexpert.engine.redstone.RedstoneShapes.nonCollision(id)) return true;
         if (com.gameexpert.engine.redstone.RedstoneShapes.nonCollision(id)) return false;
         return id != AIR && !isFluid(id) && !CropRules.isCrop(id)

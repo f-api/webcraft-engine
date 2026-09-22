@@ -4290,8 +4290,25 @@ public final class WorldRuntime {
                         ? source.blockEntities() : List.of(),
                 entities,
                 List.of());
+        if (lane != TerrainAccessor.FinalLiveCarrierLane.LOOT
+                && lane != TerrainAccessor.FinalLiveCarrierLane.ENTITIES) {
+            // Declarations only survive with their LOOT or entity rows, and this lane keeps neither, so the
+            // producer's subset projection is exactly `selected`. The carrier was verified when it was loaded;
+            // skipping the round trip keeps a carrier inflate, encode and decode per lane off the world tick.
+            if (!VERIFY_LOCAL_LANE_PROJECTION) return selected;
+            NeutralFinalChunk.Sidecars remote = carrier.withSidecars(selected).sidecars();
+            if (!remote.equals(selected)) {
+                log.error("Local {} lane projection differs from the producer for chunk {},{}",
+                        lane, carrier.chunkX(), carrier.chunkZ());
+            }
+            return remote;
+        }
         return carrier.withSidecars(selected).sidecars();
     }
+
+    /** QA switch: also ask the producer and log any difference from the local lane projection. */
+    private static final boolean VERIFY_LOCAL_LANE_PROJECTION =
+            Boolean.getBoolean("webcraft.verifyLocalLaneProjection");
 
     /** Rebuild residency-local eligibility even when the cached LOOT lane was already acknowledged. */
     private void restoreCanonicalLootCandidates(int chunkX, int chunkZ) {
