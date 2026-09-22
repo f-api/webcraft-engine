@@ -512,7 +512,8 @@ public final class CanonicalOriginChunkProductSource implements ChunkProductSour
             return committed;
         }
         bindWorldSeed(worldSeed);
-        if (isCommitted(chunkX, chunkZ)) return true;
+        // A deferred course retries frequently. Take the local admission gates before querying
+        // storage; produceIfAbsent still checks the authoritative commit while holding the slot.
         ProductionSlot slot = slots[Math.floorMod(slotIndex, productionSlots())];
         if (waitingConsumers.get() > 0 || !slot.lock.tryLock()) {
             deferredPrefetches.incrementAndGet();
