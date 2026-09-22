@@ -15465,8 +15465,15 @@ public final class WorldRuntime {
                     }
                     if (!ownerTurnMayContinue()) return;
                     requeueChunkSnapshotRequest(request);
-                    admitted++;
-                    if (architectureTurn != null) architectureTurn.snapshotPreparationAdmissions++;
+                    // A chunk already claimed and waiting for its tree halo does no work here. Counting
+                    // it against the per-turn admission bound let the nearest waiting requests (one per
+                    // session for the same chunk) use the whole bound every turn, so the colder halo
+                    // neighbours that would release them were never admitted: several players entering
+                    // a new world together stalled on the loading screen. Only real work is counted.
+                    if (activation != null) {
+                        admitted++;
+                        if (architectureTurn != null) architectureTurn.snapshotPreparationAdmissions++;
+                    }
                     continue;
                 }
                 if (!ownerTurnMayContinue()) return;
