@@ -23,9 +23,10 @@ public final class IsolatedChunkProductSource implements ChunkProductSource {
   production.lock();try{return generateLocked(x,z);}finally{production.unlock();}
  }
  public boolean prefetch(int requestedSeed,int x,int z){
-  requireSeed(requestedSeed);if(store.isCommitted(worldId,x,z))return true;
+  requireSeed(requestedSeed);
+  // Deferred prefetch attempts must not poll storage while a consumer owns production.
   if(production.hasQueuedThreads()||!production.tryLock())return false;
-  try{generateLocked(x,z);return true;}finally{production.unlock();}
+  try{if(!store.isCommitted(worldId,x,z))generateLocked(x,z);return true;}finally{production.unlock();}
  }
  private ChunkGenerator.GeneratedChunk generateLocked(int x,int z){
   ChunkGenerator.GeneratedChunk existing=replay.replayIfCommitted(x,z);if(existing!=null)return existing;

@@ -2510,10 +2510,12 @@ public class FinalCarrierPersistenceService
     private record TickLedger(List<FinalCarrierScheduledTick> scheduledRows,
             List<FinalCarrierConsumedTick> consumedRows) { }
 
-    /** Reads one current-hash partition with the authenticated candidate bound plus one sentinel. */
+    /**
+     * Reads one current-hash partition with the authenticated candidate bound plus one sentinel.
+     * Admission already probes legacy rows before either the fresh or replay path reaches here.
+     */
     private TickLedger readTickLedger(FinalCarrierTickScheduler.CarrierReceipt receipt,
             int candidateCount) {
-        probeIncompleteLegacyRows(receipt.worldId());
         Pageable limit = PageRequest.of(0, boundedRowLimit(candidateCount));
         List<FinalCarrierScheduledTick> scheduledRows = scheduled
                 .findAllByWorldIdAndChunkXAndChunkZAndLaneAndSourceFingerprintOrderByDurableOrderAscIdAsc(
@@ -2574,7 +2576,6 @@ public class FinalCarrierPersistenceService
 
     private long nextDurableOrder(FinalCarrierTickScheduler.CarrierReceipt receipt,
             TickLedger ledger, int capacity) {
-        probeIncompleteLegacyRows(receipt.worldId());
         long maximum = 0L;
         FinalCarrierScheduledTick latestScheduled = scheduled
                 .findFirstByWorldIdAndLaneOrderByDurableOrderDescIdDesc(
