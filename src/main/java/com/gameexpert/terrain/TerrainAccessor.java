@@ -305,7 +305,8 @@ public final class TerrainAccessor {
         private final int chunkX;
         private final int chunkZ;
         private final List<WorldBlockDiff> persistedDiffs;
-        private final short[] generatedBlocks;
+        /** Packed on the preparing worker, so adoption on the world owner does no per-cell work. */
+        private final PalettedBlocks packedBlocks;
         private final short[] terrainSurfaceHeights;
         private final NeutralFinalChunk finalLiveCarrier;
         private final long diffHydrationNanos;
@@ -318,7 +319,7 @@ public final class TerrainAccessor {
             this.chunkX = chunkX;
             this.chunkZ = chunkZ;
             this.persistedDiffs = persistedDiffs;
-            this.generatedBlocks = generatedBlocks;
+            this.packedBlocks = PalettedBlocks.pack(generatedBlocks);
             this.terrainSurfaceHeights = terrainSurfaceHeights;
             this.finalLiveCarrier = finalLiveCarrier;
             this.diffHydrationNanos = diffHydrationNanos;
@@ -337,8 +338,8 @@ public final class TerrainAccessor {
             return persistedDiffs;
         }
 
-        private short[] generatedBlocks() {
-            return generatedBlocks;
+        private PalettedBlocks packedBlocks() {
+            return packedBlocks;
         }
 
         private short[] terrainSurfaceHeights() {
@@ -435,7 +436,7 @@ public final class TerrainAccessor {
         private final long serial = SERIALS.incrementAndGet();
         private final int chunkX;
         private final int chunkZ;
-        private final short[] generatedBlocks;
+        private final PalettedBlocks generatedBlocks;
         private final ReplayableChunkPatch replayablePatch;
         private final int[] overrideKeys;
         private final short[] overrideTypes;
@@ -445,7 +446,7 @@ public final class TerrainAccessor {
         private final int[] finalStateKeys;
         private final byte[] finalStateCodes;
 
-        private SnapshotSource(int chunkX, int chunkZ, short[] generatedBlocks,
+        private SnapshotSource(int chunkX, int chunkZ, PalettedBlocks generatedBlocks,
                 ReplayableChunkPatch replayablePatch, Map<Integer, SnapshotCell> overrides,
                 short[] terrainSurfaceHeights,
                 NeutralFinalChunk finalLiveCarrier) {
@@ -501,11 +502,11 @@ public final class TerrainAccessor {
             int overrideSlot = overrideSlot(blockIndex);
             if (overrideSlot >= 0) return Short.toUnsignedInt(overrideTypes[overrideSlot]);
             int replayable = replayablePatch.blockTypeAt(blockIndex);
-            return replayable < 0 ? Short.toUnsignedInt(generatedBlocks[blockIndex]) : replayable;
+            return replayable < 0 ? generatedBlocks.get(blockIndex) : replayable;
         }
 
         public int generatedBlockTypeAt(int blockIndex) {
-            return Short.toUnsignedInt(generatedBlocks[blockIndex]);
+            return generatedBlocks.get(blockIndex);
         }
 
         /** Runtime seed scans must not treat an explicit edit as freshly generated terrain. */
@@ -564,9 +565,7 @@ public final class TerrainAccessor {
             if (types.length != Blocks.CHUNK_BLOCKS || states.length != Blocks.CHUNK_BLOCKS) {
                 throw new IllegalArgumentException("청크 snapshot 배열 크기가 올바르지 않습니다");
             }
-            for (int index = 0; index < generatedBlocks.length; index++) {
-                types[index] = generatedBlocks[index];
-            }
+            generatedBlocks.copyTo(0, types, 0, types.length);
             Arrays.fill(states, (byte) 0);
             applyFinalStates(states, 0, states.length);
             replayablePatch.applyTo(types, states);
@@ -603,10 +602,10 @@ public final class TerrainAccessor {
         }
 
         /**
-         * The generated array itself when no patch or override changes a block type in this section, else
-         * null. The array is shared and must not be written; index it at {@code section * 4096}.
+         * The immutable generated blocks when no patch or override changes a block type in this section, else
+         * null; read the section through {@link PalettedBlocks#get} with chunk block indices.
          */
-        public short[] unchangedSectionTypes(int section) {
+        public PalettedBlocks unchangedSectionTypes(int section) {
             int start = section * SECTION_BLOCKS;
             int end = start + SECTION_BLOCKS;
             int ordinal = replayablePatch.firstOrdinalAtOrAfter(start);
@@ -649,7 +648,7 @@ public final class TerrainAccessor {
             int start = section * SECTION_BLOCKS;
             int end = start + SECTION_BLOCKS;
             int shift = offset - start;
-            if (types != null) System.arraycopy(generatedBlocks, start, types, offset, SECTION_BLOCKS);
+            if (types != null) generatedBlocks.copyTo(start, types, offset, SECTION_BLOCKS);
             if (states != null) {
                 Arrays.fill(states, offset, offset + SECTION_BLOCKS, (byte) 0);
                 for (int slot = 0; slot < finalStateKeys.length; slot++) {
@@ -744,7 +743,7 @@ public final class TerrainAccessor {
 
     // 생성 청크 캐시(순수 결정론 캐시: 값은 seed·cx·cz 로만 결정되므로 축출 정책은 값에 무관).
     // 틱 스레드 전용 access-order LRU로, 상한에서는 가장 오래 안 쓴 하나만 축출해 재생성 절벽을 막는다.
-    private final Map<Long, short[]> genCache = new LinkedHashMap<>(1024, 0.75f, true);
+    private final Map<Long, PalettedBlocks> genCache = new LinkedHashMap<>(1024, 0.75f, true);
     private final Map<Long, short[]> genSurfaceHeights = new HashMap<>(1024);
     /** Optional immutable dormant FEATURES carrier retained with the generated LRU entry. */
     private final Map<Long, NeutralFinalChunk> generatedFinalLiveCarriers =
@@ -758,7 +757,7 @@ public final class TerrainAccessor {
     private final LongObjectOpenHashMap<short[]> runtimeSurfaceHeights =
             new LongObjectOpenHashMap<>(1024);
     // access-order LRU를 건드리지 않는 O(1) 상주 조회용 미러. 두 맵은 틱 스레드에서 함께 갱신합니다.
-    private final LongObjectOpenHashMap<short[]> residentChunks = new LongObjectOpenHashMap<>(1024);
+    private final LongObjectOpenHashMap<PalettedBlocks> residentChunks = new LongObjectOpenHashMap<>(1024);
     /**
      * Chunks in the current connected-player simulation union.  The world owner refreshes this before its
      * simulation phases; the terrain LRU may grow past its ordinary cache target rather than evicting one of
@@ -784,13 +783,13 @@ public final class TerrainAccessor {
     // 마지막으로 접근한 청크 좌표·short[](AABB 스캔은 같은 청크를 연속 조회 → floorDiv/loadedChunks/genCache 조회 스킵).
     private int lastCx = Integer.MIN_VALUE;
     private int lastCz = Integer.MIN_VALUE;
-    private short[] lastChunk;
+    private PalettedBlocks lastChunk;
 
     // residentBlock is the dominant mob/random-tick read path. Neighbour and collision probes normally stay
     // inside one chunk for several consecutive reads, so retain the already-resolved primitive source instead
     // of boxing the same long key through loadedChunks/residentChunks/replayablePatches each time.
     private long lastResidentKey = Long.MIN_VALUE;
-    private short[] lastResidentChunk;
+    private PalettedBlocks lastResidentChunk;
     private ReplayableChunkPatch lastResidentPatch;
 
     // 마지막 scanLoadedChunk 계측값. 틱 스레드 전용이며 핫 루프에서는 primitive 증가만 수행한다.
@@ -959,8 +958,8 @@ public final class TerrainAccessor {
             Short changed = chunkDiffs.get(posKey(x, y, z));
             if (changed != null) return Short.toUnsignedInt(changed);
             if (prepared != null && prepared.chunkX() == cx && prepared.chunkZ() == cz) {
-                return Short.toUnsignedInt(prepared.generatedBlocks()[Blocks.blockIndex(
-                        Math.floorMod(x, Blocks.CHUNK_X), y, Math.floorMod(z, Blocks.CHUNK_Z))]);
+                return prepared.packedBlocks().get(Blocks.blockIndex(
+                        Math.floorMod(x, Blocks.CHUNK_X), y, Math.floorMod(z, Blocks.CHUNK_Z)));
             }
             ChunkGenerator.GeneratedChunk generated = chunks.computeIfAbsent(ck,
                     ignored -> requireGeneratedChunk(
@@ -1307,7 +1306,7 @@ public final class TerrainAccessor {
                     Short.toUnsignedInt(diff.getBlockState())));
         }
         overrides.putAll(snapshotOverrides.getOrDefault(key, Map.of()));
-        return new SnapshotSource(chunkX, chunkZ, prepared.generatedBlocks(), presentationPatch,
+        return new SnapshotSource(chunkX, chunkZ, prepared.packedBlocks(), presentationPatch,
                 overrides, prepared.terrainSurfaceHeights(), prepared.finalLiveCarrier());
     }
 
@@ -1323,7 +1322,7 @@ public final class TerrainAccessor {
             installPersistedDiffs(key, persistedDiffs);
         }
         if (!residentChunks.containsKey(key)) {
-            putGeneratedChunk(key, prepared.generatedBlocks(), prepared.terrainSurfaceHeights(),
+            putGeneratedChunk(key, prepared.packedBlocks(), prepared.terrainSurfaceHeights(),
                     prepared.finalLiveCarrier());
         }
     }
@@ -1349,7 +1348,7 @@ public final class TerrainAccessor {
     public void installReplayablePatch(int chunkX, int chunkZ, ReplayableChunkPatch patch) {
         if (patch == null) throw new IllegalArgumentException("자연 패치가 없습니다");
         long key = chunkKey(chunkX, chunkZ);
-        short[] resident = residentChunks.get(key);
+        PalettedBlocks resident = residentChunks.get(key);
         if (resident == null) {
             throw new IllegalStateException("상주하지 않은 청크에 자연 패치를 설치할 수 없습니다: "
                     + chunkX + "," + chunkZ);
@@ -1374,7 +1373,7 @@ public final class TerrainAccessor {
         int cx = Math.floorDiv(x, Blocks.CHUNK_X);
         int cz = Math.floorDiv(z, Blocks.CHUNK_Z);
         long key = chunkKey(cx, cz);
-        short[] generated;
+        PalettedBlocks generated;
         ReplayableChunkPatch patch;
         if (key == lastResidentKey) {
             generated = lastResidentChunk;
@@ -1395,7 +1394,7 @@ public final class TerrainAccessor {
             block = (int) overlaid & 0xFFFF;
         } else {
             int replayable = patch == null ? -1 : patch.blockTypeAt(index);
-            block = replayable < 0 ? Short.toUnsignedInt(generated[index]) : replayable;
+            block = replayable < 0 ? generated.get(index) : replayable;
         }
         return ResidentBlock.available(block);
     }
@@ -1470,7 +1469,7 @@ public final class TerrainAccessor {
         snapshotOverrides.remove(key);
         dirtySnapshotSources.remove(key);
         rebuildRuntimeSurfaceHeights(key);
-        short[] resident = residentChunks.get(key);
+        PalettedBlocks resident = residentChunks.get(key);
         if (resident == null) {
             snapshotSources.remove(key);
         } else {
@@ -1508,12 +1507,12 @@ public final class TerrainAccessor {
         if (overlaid != OVERLAY_ABSENT) {
             return (int) overlaid & 0xFFFF;
         }
-        short[] chunk = generatedChunk(cx, cz);
+        PalettedBlocks chunk = generatedChunk(cx, cz);
         int index = Blocks.blockIndex(Math.floorMod(x, Blocks.CHUNK_X), y,
                 Math.floorMod(z, Blocks.CHUNK_Z));
         ReplayableChunkPatch patch = replayablePatches.get(chunkKey(cx, cz));
         int replayable = patch == null ? -1 : patch.blockTypeAt(index);
-        return replayable < 0 ? Short.toUnsignedInt(chunk[index]) : replayable;
+        return replayable < 0 ? chunk.get(index) : replayable;
     }
 
     /**
@@ -1537,7 +1536,7 @@ public final class TerrainAccessor {
         if (!loadedChunks.contains(key)) {
             throw new IllegalStateException("청크가 아직 로드되지 않았습니다: " + cx + "," + cz);
         }
-        short[] generated = generatedChunk(cx, cz);
+        PalettedBlocks generated = generatedChunk(cx, cz);
         boolean hasOverlay = overlayChunks.contains(key);
         ReplayableChunkPatch patch = replayablePatches.getOrDefault(key, ReplayableChunkPatch.EMPTY);
         int patchOrdinal = patch.firstOrdinalAtOrAfter(Blocks.blockIndex(0, minY, 0));
@@ -1566,7 +1565,7 @@ public final class TerrainAccessor {
                     }
                     int id = overlaid != OVERLAY_ABSENT
                             ? (int) overlaid & 0xFFFF
-                            : replayable >= 0 ? replayable : Short.toUnsignedInt(generated[index]);
+                            : replayable >= 0 ? replayable : generated.get(index);
                     processedCells++;
                     if (!hasOverlay) overlayLookupsSkipped++;
                     visitor.visit(x, y, z, id);
@@ -1587,7 +1586,7 @@ public final class TerrainAccessor {
     public boolean scanResidentSection(int sectionX, int sectionY, int sectionZ,
             ChunkBlockVisitor visitor) {
         long key = chunkKey(sectionX, sectionZ);
-        short[] generated = residentChunks.get(key);
+        PalettedBlocks generated = residentChunks.get(key);
         if (generated == null) return false;
         int minY = Math.max(Blocks.MIN_Y, sectionY * 16);
         int maxY = Math.min(Blocks.MAX_Y, sectionY * 16 + 15);
@@ -1611,7 +1610,7 @@ public final class TerrainAccessor {
                     int replayable = patch.blockTypeAt(index);
                     int block = overlaid != OVERLAY_ABSENT
                             ? (int) overlaid & 0xFFFF
-                            : replayable >= 0 ? replayable : Short.toUnsignedInt(generated[index]);
+                            : replayable >= 0 ? replayable : generated.get(index);
                     visitor.visit(x, y, z, block);
                 }
             }
@@ -1710,28 +1709,28 @@ public final class TerrainAccessor {
     }
 
     private int generatedBlock(int cx, int cz, int x, int y, int z) {
-        short[] chunk = lastChunk;
+        PalettedBlocks chunk = lastChunk;
         if (chunk == null) {
             chunk = generatedChunk(cx, cz);
             lastChunk = chunk; // getBlock 이 lastCx/lastCz 를 이미 이 청크로 설정함
         }
         int lx = Math.floorMod(x, 16);
         int lz = Math.floorMod(z, 16);
-        return Short.toUnsignedInt(chunk[Blocks.blockIndex(lx, y, lz)]);
+        return chunk.get(Blocks.blockIndex(lx, y, lz));
     }
 
     /**
      * 생성 지형 바이트를 캐시에서 읽습니다. 스포너처럼 생성 지형만 검사하는 틱 스레드 시스템이
      * 같은 청크를 다시 생성하지 않도록 공유하는 읽기 전용 경로이며, 반환 배열을 수정하면 안 됩니다.
      */
-    public short[] generatedChunkForScan(int cx, int cz) {
+    public PalettedBlocks generatedChunkForScan(int cx, int cz) {
         long key = chunkKey(cx, cz);
-        short[] chunk = genCache.get(key);
+        PalettedBlocks chunk = genCache.get(key);
         if (chunk == null) {
             TickSafetyTelemetry.record(TickSafetyTelemetry.Event.TERRAIN_GENERATION);
             ChunkGenerator.GeneratedChunk generated =
                     generateChunkProduct(cx, cz);
-            chunk = generated.blocks();
+            chunk = PalettedBlocks.pack(generated.blocks());
             putGeneratedChunk(key, chunk, generated.surfaceHeights(),
                     generated.finalLiveCarrier());
         } else if (!residentChunks.containsKey(key)) {
@@ -1744,11 +1743,11 @@ public final class TerrainAccessor {
     }
 
     /** 이미 틱 스레드 캐시에 있는 생성 지형만 O(1)로 비파괴적으로 읽습니다. */
-    public short[] cachedChunkForScan(int cx, int cz) {
+    public PalettedBlocks cachedChunkForScan(int cx, int cz) {
         return residentChunks.get(chunkKey(cx, cz));
     }
 
-    private void putGeneratedChunk(long key, short[] chunk, short[] terrainSurfaceHeights,
+    private void putGeneratedChunk(long key, PalettedBlocks chunk, short[] terrainSurfaceHeights,
             NeutralFinalChunk finalLiveCarrier) {
         NeutralFinalChunk previousCarrier =
                 generatedFinalLiveCarriers.get(key);
@@ -1757,7 +1756,7 @@ public final class TerrainAccessor {
             throw new IllegalStateException(
                     "resident final-live carrier cannot be replaced before cache eviction");
         }
-        short[] replacedChunk = genCache.put(key, chunk);
+        PalettedBlocks replacedChunk = genCache.put(key, chunk);
         boolean insertedIntoGeneratedCache = replacedChunk == null;
         genSurfaceHeights.put(key, terrainSurfaceHeights);
         if (finalLiveCarrier == null) {
@@ -1943,7 +1942,7 @@ public final class TerrainAccessor {
         int chunkX = Math.floorDiv(x, Blocks.CHUNK_X);
         int chunkZ = Math.floorDiv(z, Blocks.CHUNK_Z);
         long key = chunkKey(chunkX, chunkZ);
-        short[] generated = residentChunks.get(key);
+        PalettedBlocks generated = residentChunks.get(key);
         if (generated == null) return Blocks.AIR;
         long overlaid = overlay.get(posKey(x, y, z), OVERLAY_ABSENT);
         if (overlaid != OVERLAY_ABSENT) return (int) overlaid & 0xFFFF;
@@ -1951,7 +1950,7 @@ public final class TerrainAccessor {
                 Math.floorMod(z, Blocks.CHUNK_Z));
         ReplayableChunkPatch patch = replayablePatches.get(key);
         int replayable = patch == null ? -1 : patch.blockTypeAt(index);
-        return replayable < 0 ? Short.toUnsignedInt(generated[index]) : replayable;
+        return replayable < 0 ? generated.get(index) : replayable;
     }
 
     private int surfaceStateAt(int x, int y, int z) {
@@ -2046,7 +2045,7 @@ public final class TerrainAccessor {
         return GEN_CACHE_LIMIT;
     }
 
-    private short[] generatedChunk(int cx, int cz) {
+    private PalettedBlocks generatedChunk(int cx, int cz) {
         return generatedChunkForScan(cx, cz);
     }
 

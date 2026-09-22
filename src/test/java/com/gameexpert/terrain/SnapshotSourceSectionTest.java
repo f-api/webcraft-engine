@@ -17,7 +17,7 @@ class SnapshotSourceSectionTest {
         Constructor<?> ctor = Arrays.stream(TerrainAccessor.SnapshotSource.class.getDeclaredConstructors())
                 .filter(c -> c.getParameterCount() == 7).findFirst().orElseThrow();
         ctor.setAccessible(true);
-        return (TerrainAccessor.SnapshotSource) ctor.newInstance(0, 0, generated, patch, Map.of(),
+        return (TerrainAccessor.SnapshotSource) ctor.newInstance(0, 0, PalettedBlocks.pack(generated), patch, Map.of(),
                 new short[256], carrier);
     }
 
@@ -52,10 +52,11 @@ class SnapshotSourceSectionTest {
             source.copySectionInto(section, null, statesOnly);
             assertArrayEquals(states, statesOnly);
 
-            short[] shared = source.unchangedSectionTypes(section);
+            PalettedBlocks shared = source.unchangedSectionTypes(section);
             if (shared != null) {
-                assertSame(generated, shared);
-                assertArrayEquals(types, Arrays.copyOfRange(shared, start, start + SECTION));
+                short[] sharedSection = new short[SECTION];
+                shared.copyTo(start, sharedSection, 0, SECTION);
+                assertArrayEquals(types, sharedSection);
             }
             boolean noStates = true;
             for (byte state : states) noStates &= state == 0;
@@ -63,7 +64,7 @@ class SnapshotSourceSectionTest {
         }
         assertNull(source.unchangedSectionTypes(2));
         assertNull(source.unchangedSectionTypes(5));
-        assertSame(generated, source.unchangedSectionTypes(9));
+        assertNotNull(source.unchangedSectionTypes(9));
         assertFalse(source.sectionHasNoStates(5));
         assertFalse(source.sectionHasNoStates(9));
         assertTrue(source.sectionHasNoStates(2));

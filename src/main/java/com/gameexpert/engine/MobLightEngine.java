@@ -641,15 +641,25 @@ final class MobLightEngine {
     private static final class ColumnLightCache {
         private static final int SECTION_BLOCKS = 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
         private static final int SECTION_MASK = SECTION_BLOCKS - 1;
+        private static final int SECTIONS = Blocks.CHUNK_Y / 16;
+        private static final ThreadLocal<short[]> SCRATCH_TYPES =
+                ThreadLocal.withInitial(() -> new short[SECTION_BLOCKS]);
+        private static final ThreadLocal<byte[]> SCRATCH_STATES =
+                ThreadLocal.withInitial(() -> new byte[SECTION_BLOCKS]);
         private TerrainAccessor.SnapshotSource source;
-        private static final byte[] NO_STATES = new byte[SECTION_BLOCKS];
         // Sections are filled on first use. A section the source did not change after generation reads the
-        // source's own immutable generated array (at typeBase = section start) instead of a private copy, and
-        // one without block states reads NO_STATES; only edited sections cost memory here. Shared arrays are
-        // never written: rebind() copies a section before patching it.
-        private final short[][] blockTypes = new short[Blocks.CHUNK_Y / 16][];
-        private final int[] typeBase = new int[Blocks.CHUNK_Y / 16];
-        private final byte[][] blockStates = new byte[Blocks.CHUNK_Y / 16][];
+        // source's immutable packed blocks; one with natural-patch or edited cells, or with block states, keeps
+        // its own palette-packed copy. Only a section a later mutation patches in place (rebind) is expanded
+        // to plain arrays, so a resident chunk's light view costs kilobytes, not 294KB.
+        private final boolean[] loaded = new boolean[SECTIONS];
+        private final com.gameexpert.terrain.PalettedBlocks[] sharedTypes =
+                new com.gameexpert.terrain.PalettedBlocks[SECTIONS];
+        private final com.gameexpert.terrain.PalettedSection[] packedTypes =
+                new com.gameexpert.terrain.PalettedSection[SECTIONS];
+        private final com.gameexpert.terrain.PalettedSection[] packedStates =
+                new com.gameexpert.terrain.PalettedSection[SECTIONS];
+        private final short[][] blockTypes = new short[SECTIONS][];
+        private final byte[][] blockStates = new byte[SECTIONS][];
         private final short[] top = new short[Blocks.CHUNK_X * Blocks.CHUNK_Z];
         private final short[] occupiedTop = new short[Blocks.CHUNK_X * Blocks.CHUNK_Z];
         private final short[] motionBlockingNoLeavesTop =
@@ -668,24 +678,22 @@ final class MobLightEngine {
 
         private boolean hasEmission(int minY, int maxY) {
             int firstSection = Math.max(0, (minY - Blocks.MIN_Y) >> 4);
-            int lastSection = Math.min(blockTypes.length - 1,
+            int lastSection = Math.min(SECTIONS - 1,
                     (maxY - Blocks.MIN_Y) >> 4);
             if (firstSection > lastSection) return false;
             for (int section = firstSection; section <= lastSection; section++) {
                 int bit = 1 << section;
                 if ((knownEmissionSections & bit) == 0) {
                     ensureSection(section);
-                    short[] types = blockTypes[section];
-                    int base = typeBase[section];
-                    byte[] states = blockStates[section];
+                    int start = section * SECTION_BLOCKS;
                     boolean present = false;
-                    for (int index = 0; index < SECTION_BLOCKS; index++) {
-                        int id = Short.toUnsignedInt(types[base + index]);
+                    for (int index = start; index < start + SECTION_BLOCKS; index++) {
+                        int id = blockTypeAt(index);
                         int state = id == Blocks.CAMPFIRE
                                 || id == Blocks.CAVE_VINES || id == Blocks.CAVE_VINES_PLANT
                                 || id == Blocks.TRIAL_SPAWNER || id == Blocks.VAULT
                                 || id == Blocks.CAULDRON
-                                ? Byte.toUnsignedInt(states[index]) : 0;
+                                ? blockStateAt(index) : 0;
                         if (emission(id, state) > 0) {
                             present = true;
                             break;
@@ -711,7 +719,6 @@ final class MobLightEngine {
         }
 
         private void rebind(TerrainAccessor.SnapshotSource replacement) {
-            source = replacement;
             // Ordinary block mutations publish a replacement snapshot but affect only the invalidated columns.
             // 이미 읽은 16높이 섹션의 해당 컬럼만 갱신한다. 아직 읽지 않은 섹션은 첫 실제 조회가
             // 채우므로 cold start에서 98,304셀 전체 복사를 다시 만들지 않는다.
@@ -721,57 +728,77 @@ final class MobLightEngine {
                 int localZ = column / Blocks.CHUNK_X;
                 for (int y = Blocks.MIN_Y; y <= Blocks.MAX_Y; y++) {
                     int section = (y - Blocks.MIN_Y) >> 4;
-                    if (blockTypes[section] == null) continue;
-                    privatize(section);
+                    if (!loaded[section]) continue;
                     int index = Blocks.blockIndex(localX, y, localZ);
-                    blockTypes[section][index & SECTION_MASK] = (short) replacement.blockTypeAt(index);
-                    blockStates[section][index & SECTION_MASK] = (byte) replacement.blockStateAt(index);
+                    int type = replacement.blockTypeAt(index);
+                    int state = replacement.blockStateAt(index);
+                    // Only a section whose cell really changed leaves its shared/packed form.
+                    if (blockTypeAt(index) == type && blockStateAt(index) == state) continue;
+                    expand(section);
+                    blockTypes[section][index & SECTION_MASK] = (short) type;
+                    blockStates[section][index & SECTION_MASK] = (byte) state;
                 }
                 dirtyColumns[column] = false;
             }
+            source = replacement;
             sourceMayChange = false;
         }
 
         private int blockTypeAt(int index) {
             int section = index >>> 12;
+            if (!loaded[section]) ensureSection(section);
             short[] types = blockTypes[section];
-            if (types == null) types = ensureSection(section);
-            return Short.toUnsignedInt(types[typeBase[section] + (index & SECTION_MASK)]);
+            if (types != null) return Short.toUnsignedInt(types[index & SECTION_MASK]);
+            com.gameexpert.terrain.PalettedSection packed = packedTypes[section];
+            if (packed != null) return packed.get(index & SECTION_MASK);
+            return sharedTypes[section].get(index);
         }
 
         private int blockStateAt(int index) {
-            if (blockStates[index >>> 12] == null) ensureSection(index >>> 12);
-            return Byte.toUnsignedInt(blockStates[index >>> 12][index & SECTION_MASK]);
+            int section = index >>> 12;
+            if (!loaded[section]) ensureSection(section);
+            byte[] states = blockStates[section];
+            if (states != null) return Byte.toUnsignedInt(states[index & SECTION_MASK]);
+            com.gameexpert.terrain.PalettedSection packed = packedStates[section];
+            return packed == null ? 0 : packed.get(index & SECTION_MASK);
         }
 
-        private short[] ensureSection(int section) {
-            short[] types = blockTypes[section];
-            if (types != null) return types;
-            short[] generated = source.unchangedSectionTypes(section);
+        private void ensureSection(int section) {
+            if (loaded[section]) return;
+            com.gameexpert.terrain.PalettedBlocks generated = source.unchangedSectionTypes(section);
             boolean noStates = source.sectionHasNoStates(section);
-            byte[] states = noStates ? NO_STATES : new byte[SECTION_BLOCKS];
-            if (generated != null) {
-                types = generated;
-                typeBase[section] = section * SECTION_BLOCKS;
-                if (!noStates) source.copySectionInto(section, null, states);
-            } else {
-                types = new short[SECTION_BLOCKS];
-                typeBase[section] = 0;
-                source.copySectionInto(section, types, noStates ? null : states);
+            short[] types = generated == null ? SCRATCH_TYPES.get() : null;
+            byte[] states = noStates ? null : SCRATCH_STATES.get();
+            if (types != null || states != null) source.copySectionInto(section, types, states);
+            if (generated != null) sharedTypes[section] = generated;
+            else packedTypes[section] = com.gameexpert.terrain.PalettedSection.pack(types);
+            if (states != null) {
+                short[] widened = SCRATCH_TYPES.get();
+                for (int local = 0; local < SECTION_BLOCKS; local++) {
+                    widened[local] = (short) Byte.toUnsignedInt(states[local]);
+                }
+                com.gameexpert.terrain.PalettedSection packed =
+                        com.gameexpert.terrain.PalettedSection.pack(widened);
+                if (!packed.isUniform(0)) packedStates[section] = packed;
+            }
+            loaded[section] = true;
+        }
+
+        /** Gives a loaded section plain arrays, read from its current form, so rebind() can patch it in place. */
+        private void expand(int section) {
+            if (blockTypes[section] != null) return;
+            short[] types = new short[SECTION_BLOCKS];
+            byte[] states = new byte[SECTION_BLOCKS];
+            int start = section * SECTION_BLOCKS;
+            for (int local = 0; local < SECTION_BLOCKS; local++) {
+                types[local] = (short) blockTypeAt(start + local);
+                states[local] = (byte) blockStateAt(start + local);
             }
             blockTypes[section] = types;
             blockStates[section] = states;
-            return types;
-        }
-
-        /** Gives a loaded section private arrays so it can be patched without touching shared ones. */
-        private void privatize(int section) {
-            if (typeBase[section] != 0 || blockTypes[section].length != SECTION_BLOCKS) {
-                blockTypes[section] = Arrays.copyOfRange(blockTypes[section], typeBase[section],
-                        typeBase[section] + SECTION_BLOCKS);
-                typeBase[section] = 0;
-            }
-            if (blockStates[section] == NO_STATES) blockStates[section] = new byte[SECTION_BLOCKS];
+            sharedTypes[section] = null;
+            packedTypes[section] = null;
+            packedStates[section] = null;
         }
     }
 
