@@ -26,9 +26,10 @@ public final class ProducerStoreWire {
             byte[] fin,byte[] structure,byte[] successor,byte[] fingerprint,int[] overrides){
         Objects.requireNonNull(overrides);if(overrides.length>98304)throw new IllegalArgumentException("too many player overrides");
         try{
-            var bytes=new ByteArrayOutputStream();var out=header(bytes,profile,3);out.writeLong(world);out.writeInt(x);out.writeInt(z);
+            var bytes=new SizedBytes(512+16L+fin.length+structure.length+(successor==null?0:successor.length)
+                    +fingerprint.length+4+4L*overrides.length);var out=header(bytes,profile,3);out.writeLong(world);out.writeInt(x);out.writeInt(z);
             write(out,fin);write(out,structure);write(out,successor);write(out,fingerprint);out.writeInt(overrides.length);for(int cell:overrides)out.writeInt(cell);out.flush();
-            try(var in=response(session.exchange(bytes.toByteArray()))){
+            try(var in=response(session.exchange(bytes.exact()))){
                 byte[] f=read(in,false),s=read(in,false),m=read(in,true),h=read(in,false);int count=in.readInt();
                 if(count<0||count*4L>in.available())throw new IOException("invalid reference count list");
                 List<Integer> counts=new ArrayList<>();for(int i=0;i<count;i++){int value=in.readInt();if(value<0)throw new IOException("negative structure reference");counts.add(value);}

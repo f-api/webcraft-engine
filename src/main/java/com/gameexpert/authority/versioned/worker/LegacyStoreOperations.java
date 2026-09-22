@@ -16,10 +16,12 @@ public final class LegacyStoreOperations {
         int[] overrides=new int[count];for(int i=0;i<count;i++)overrides[i]=in.readInt();
         String identity=(String)Class.forName("com.gameexpert.world.WorldBaseline").getField("ID").get(null);
         var commit=new CanonicalWorldgenStore.ChunkCommit(world,identity,x,z,fin,structure,successor,fingerprint,overrides);
-        var result=new ByteArrayOutputStream();var out=new DataOutputStream(result);
-        out.writeInt(0x57504731);out.writeByte(1);write(out,commit.finalCarrier());write(out,commit.structureCarrier());write(out,commit.mutablePieceSuccessor());write(out,commit.fingerprint());
-        out.writeInt(commit.orderedReferenceCounts().size());for(int value:commit.orderedReferenceCounts())out.writeInt(value);
-        out.flush();return result.toByteArray();
+        byte[] cf=commit.finalCarrier(),cs=commit.structureCarrier(),cm=commit.mutablePieceSuccessor(),ch=commit.fingerprint();
+        var counts=commit.orderedReferenceCounts();
+        var result=new WorkerBytes(4+1+16L+cf.length+cs.length+(cm==null?0:cm.length)+ch.length+4+4L*counts.size());var out=new DataOutputStream(result);
+        out.writeInt(0x57504731);out.writeByte(1);write(out,cf);write(out,cs);write(out,cm);write(out,ch);
+        out.writeInt(counts.size());for(int value:counts)out.writeInt(value);
+        out.flush();return result.exact();
     }
     public static byte[] references(DataInputStream in) throws Exception {
         ReferenceSnapshot snapshot=readReferences(in);

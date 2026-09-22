@@ -91,7 +91,8 @@ public final class Mc263CanonicalGenerationProduct {
         Mc263FinalChunkCodec.FinalChunk suppliedFinalChunk =
                 Objects.requireNonNull(finalChunk, "final chunk");
         this.structureCarrier = Objects.requireNonNull(structureCarrier, "structure carrier");
-        this.provenanceReceipt = copy(provenanceReceipt, "provenance receipt");
+        // The producer hands over a fresh array it never touches again; copying ~5MB was pure churn.
+        this.provenanceReceipt = requireNonEmpty(provenanceReceipt, "provenance receipt");
         this.featuresReceipt = copy(featuresReceipt, "FEATURES receipt");
         this.stageHashes = List.copyOf(stageHashes);
         if (this.stageHashes.size() != 3) {
@@ -255,7 +256,7 @@ public final class Mc263CanonicalGenerationProduct {
     private ProvenanceTarget readProvenanceTarget() {
         ByteBuffer envelope = ByteBuffer.wrap(provenanceReceipt);
         requireBytes(envelope, PROVENANCE_MAGIC, "canonical provenance magic");
-        byte[] sourceReceipt = readSection(envelope, "source provenance");
+        ByteBuffer sourceReceipt = readSectionView(envelope, "source provenance");
         byte[] structures = readSection(envelope, "structure provenance");
         if (envelope.hasRemaining()) {
             throw new IllegalArgumentException("canonical provenance has trailing bytes");
@@ -274,7 +275,10 @@ public final class Mc263CanonicalGenerationProduct {
     }
 
     private static TargetIdentity parseSourceReceipt(byte[] sourceReceipt) {
-        ByteBuffer source = ByteBuffer.wrap(sourceReceipt);
+        return parseSourceReceipt(ByteBuffer.wrap(sourceReceipt));
+    }
+
+    private static TargetIdentity parseSourceReceipt(ByteBuffer source) {
         TargetIdentity target = parsePostCarversReceipt(source);
         requireBytes(source, PRODUCTION_CONTEXT_AUTHORITY_MAGIC,
                 "production-context authority provenance magic");
@@ -500,8 +504,10 @@ public final class Mc263CanonicalGenerationProduct {
 
     private byte[] productBinding(byte[] finalCarrier) {
         try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(bytes);
+            // SHA-256 of the same stream, fed straight to the digest instead of a ~6MB byte array.
+            MessageDigest digest = sha256Digest();
+            DataOutputStream out = new DataOutputStream(new java.security.DigestOutputStream(
+                    java.io.OutputStream.nullOutputStream(), digest));
             out.write("MC263-FINAL-CARRIER-PRODUCT-BINDING-V2\0"
                     .getBytes(StandardCharsets.US_ASCII));
             out.writeLong(worldSeed); out.writeInt(finalChunk.chunkX());
@@ -514,7 +520,7 @@ public final class Mc263CanonicalGenerationProduct {
             out.write(HexFormat.of().parseHex(
                     integratedBuildReceipt.exporterSourceSha256()));
             out.flush();
-            return sha256Bytes(bytes.toByteArray());
+            return digest.digest();
         } catch (IOException impossible) {
             throw new IllegalStateException(impossible);
         }
@@ -985,6 +991,20 @@ public final class Mc263CanonicalGenerationProduct {
         }
     }
 
+    /** Same bounds as {@link #readSection}, returned as a view of the envelope instead of a copy. */
+    private static ByteBuffer readSectionView(ByteBuffer input, String name) {
+        if (input.remaining() < Integer.BYTES) {
+            throw new IllegalArgumentException("missing " + name + " length");
+        }
+        int length = input.getInt();
+        if (length < 0 || length > input.remaining()) {
+            throw new IllegalArgumentException("invalid " + name + " length");
+        }
+        ByteBuffer view = input.slice(input.position(), length);
+        input.position(input.position() + length);
+        return view;
+    }
+
     private static byte[] readSection(ByteBuffer input, String name) {
         if (input.remaining() < Integer.BYTES) {
             throw new IllegalArgumentException("missing " + name + " length");
@@ -1032,6 +1052,12 @@ public final class Mc263CanonicalGenerationProduct {
             Objects.requireNonNull(successor, "origin successor");
         }
         @Override public byte[] bytes() { return bytes.clone(); }
+    }
+
+    private static byte[] requireNonEmpty(byte[] value, String name) {
+        Objects.requireNonNull(value, name);
+        if (value.length == 0) throw new IllegalArgumentException(name + " is empty");
+        return value;
     }
 
     private static byte[] copy(byte[] value, String name) {

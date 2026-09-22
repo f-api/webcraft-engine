@@ -21,7 +21,7 @@ public class ProducerBundleSmoke {
                 throw new AssertionError("Immutable producer identity changed: " + key);
             }
         }
-        String cacheKey = "abdfa334ea533f85172b437bc11b9340a7735d896817ce8ec6e17632c6aee6f7-"
+        String cacheKey = "a4caebe4f454b916e1dd1c320b20cbf27179396ad3ae905987b6ea2725761aed-"
                 + manifest.getProperty("jar.0.sha256");
         if (!directory.getFileName().toString().equals(cacheKey)) {
             throw new AssertionError("Worker adapter does not have an isolated cache");

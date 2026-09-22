@@ -41,8 +41,10 @@ public final class LegacyStructureGenerationRequest {
    var pending=Mc263FeaturesRegionBridge.startPostCarversInput(context.builders,seed,x,z,assembly.carrier(),context.features);
    var product=Mc263FeaturesRegionBridge.generateCanonicalProductFromInput(seed,x,z,assembly.carrier(),contexts,new CanonicalPostprocessActivationContext(time),pending.finish());
    product.verifiedFinalChunk(seed,x,z); // Preserve the original product provenance check before projection.
-   var result=new ByteArrayOutputStream();var out=new DataOutputStream(result);out.writeInt(0x57504731);out.writeByte(1);out.writeLong(worldId);out.writeInt(seed);out.writeInt(x);out.writeInt(z);out.writeUTF(expected);
-   byte[] successor=product.structureCarrier().receiptBytes();for(byte[] raw:new byte[][]{product.finalCarrier(),successor,successor,product.commitFingerprint()}){out.writeInt(raw.length);out.write(raw);}out.flush();return result.toByteArray();
+   byte[] successor=product.structureCarrier().receiptBytes();byte[][] parts={product.finalCarrier(),successor,successor,product.commitFingerprint()};
+   long size=4+1+8+4+4+4+2+expected.length();for(byte[] raw:parts)size+=4+raw.length;
+   var result=new WorkerBytes(size);var out=new DataOutputStream(result);out.writeInt(0x57504731);out.writeByte(1);out.writeLong(worldId);out.writeInt(seed);out.writeInt(x);out.writeInt(z);out.writeUTF(expected);
+   for(byte[] raw:parts){out.writeInt(raw.length);out.write(raw);}out.flush();return result.exact();
   }
  }
 }

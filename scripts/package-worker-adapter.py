@@ -16,7 +16,7 @@ def require(condition, message):
 
 root, archive, javac, destination = map(Path, sys.argv[1:])
 sha = lambda data: hashlib.sha256(data).hexdigest()
-require(sha(archive.read_bytes()) == 'abdfa334ea533f85172b437bc11b9340a7735d896817ce8ec6e17632c6aee6f7',
+require(sha(archive.read_bytes()) == 'a4caebe4f454b916e1dd1c320b20cbf27179396ad3ae905987b6ea2725761aed',
         'Producer archive checksum mismatch')
 manifest_text = (root / 'src/main/resources/generation-producers/current-worker.properties').read_text()
 manifest = dict(line.split('=', 1) for line in manifest_text.splitlines() if '=' in line)

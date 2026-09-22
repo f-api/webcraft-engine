@@ -71,7 +71,10 @@ public final class LegacyGenerationRequest {
                         product.finalCarrier(), successor, successor, product.commitFingerprint());
             }
         }
-        var bytes = new ByteArrayOutputStream();
+        long size = 4 + 1 + 8 + 4 + 4 + 4 + 2 + expectedReferenceReceipt.length()
+                + frameSize(proposal.finalCarrier()) + frameSize(proposal.structureCarrier())
+                + frameSize(proposal.mutablePieceSuccessor()) + frameSize(proposal.fingerprint());
+        var bytes = new WorkerBytes(size);
         try (var output = new DataOutputStream(bytes)) {
             output.writeInt(0x57504731);
             output.writeByte(1);
@@ -85,7 +88,11 @@ public final class LegacyGenerationRequest {
             writeBytes(output, proposal.mutablePieceSuccessor());
             writeBytes(output, proposal.fingerprint());
         }
-        return bytes.toByteArray();
+        return bytes.exact();
+    }
+
+    private static long frameSize(byte[] value) {
+        return 4L + (value == null ? 0 : value.length);
     }
 
     private static byte[] readBytes(DataInputStream input, boolean nullable) throws IOException {

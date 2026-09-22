@@ -52,15 +52,19 @@ final class ProducerBinding {
         if(source.sidecars().equals(selected)) return source;
         final byte[] carrier=carrier();
         try {
-            var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);header(out,4);
-            out.writeInt(source.chunkX());out.writeInt(source.chunkZ());out.writeInt(carrier.length);out.write(carrier);
             Sidecars original=source.sidecars();
+            long ordinalBytes=4L*(9+selected.blockTicks().size()+selected.fluidTicks().size()+selected.loot().size()
+                    +selected.spawners().size()+selected.owners().size()+selected.archaeology().size()
+                    +selected.bees().size()+selected.blockEntities().size()+selected.entities().size());
+            var bytes=new SizedBytes(512+12L+carrier.length+ordinalBytes);var out=new DataOutputStream(bytes);header(out,4);
+            out.writeInt(source.chunkX());out.writeInt(source.chunkZ());out.writeInt(carrier.length);out.write(carrier);
             ordinals(out,original.blockTicks(),selected.blockTicks());ordinals(out,original.fluidTicks(),selected.fluidTicks());
             ordinals(out,original.loot(),selected.loot());ordinals(out,original.spawners(),selected.spawners());
             ordinals(out,original.owners(),selected.owners());ordinals(out,original.archaeology(),selected.archaeology());
             ordinals(out,original.bees(),selected.bees());ordinals(out,original.blockEntities(),selected.blockEntities());
             ordinals(out,original.entities(),selected.entities());
-            try(var in=response(bytes.toByteArray())) {
+            out.flush();
+            try(var in=response(bytes.exact())) {
                 byte[] encoded=readBytes(in),projection=readBytes(in);
                 if(in.available()!=0)throw new IOException("trailing subset response");
                 NeutralFinalChunk result=NeutralFinalChunkWire.decodeResponse(projection,source.chunkX(),source.chunkZ());

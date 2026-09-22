@@ -56,8 +56,6 @@ public final class ChunkGenerator {
     private final McDensityFunction density;
     private final McDensityFunction noodleDensity;
     private final McDensityFunction.Context densityContext;
-    /** Returned to this thread's pool by {@link #finish}; a generator is not used after that. */
-    private final DensityEvaluationCache evaluationCache;
     private final Mc263Beardifier beardifier;
     private final McAquifer.Inputs aquiferInputs;
     private McAquifer aquifer;
@@ -100,7 +98,8 @@ public final class ChunkGenerator {
         this.beardifier = beardifier;
         this.density=resources.graph.mainLatticeInput();
         this.noodleDensity=resources.graph.noodle();
-        this.evaluationCache = DensityEvaluationCache.acquire(resources.graph.cacheSlotCount());
+        DensityEvaluationCache evaluationCache =
+                new DensityEvaluationCache(resources.graph.cacheSlotCount());
         this.densityContext=new McDensityFunction.Context(0,0,0,evaluationCache);
         this.densityColumnCache=resources.columns;
         this.evidenceContext=evidenceContext;
@@ -337,11 +336,7 @@ public final class ChunkGenerator {
         checkCancellation(context);
         ChunkGenerator generator=new ChunkGenerator(seed, null,
                 context.densityResources(seed), context);
-        try {
-            return generator.generatePostCarversEvidence(cx, cz);
-        } finally {
-            generator.finish();
-        }
+        return generator.generatePostCarversEvidence(cx, cz);
     }
 
     /**
@@ -351,11 +346,7 @@ public final class ChunkGenerator {
     static PostCarversChunkData generatePostCarversChunkData(int seed, int cx, int cz) {
         requireRepresentableChunk(cx, cz);
         ChunkGenerator generator = new ChunkGenerator(seed);
-        try {
-            return generator.generatePostCarversChunkData(cx, cz);
-        } finally {
-            generator.finish();
-        }
+        return generator.generatePostCarversChunkData(cx, cz);
     }
 
     /** Package boundary for a post-CARVERS cut with worker-local evidence resources. */
@@ -366,11 +357,7 @@ public final class ChunkGenerator {
         checkCancellation(context);
         ChunkGenerator generator = new ChunkGenerator(seed, null,
                 context.densityResources(seed), context);
-        try {
-            return generator.generatePostCarversChunkData(cx, cz);
-        } finally {
-            generator.finish();
-        }
+        return generator.generatePostCarversChunkData(cx, cz);
     }
 
     /**
@@ -382,11 +369,7 @@ public final class ChunkGenerator {
         requireRepresentableChunk(cx, cz);
         ChunkGenerator generator = new ChunkGenerator(seed,
                 Objects.requireNonNull(beardifier, "canonical Beardifier"));
-        try {
-            return generator.generatePostCarversChunkData(cx, cz);
-        } finally {
-            generator.finish();
-        }
+        return generator.generatePostCarversChunkData(cx, cz);
     }
 
     /** Package boundary for a Beardifier-backed cut with worker-local evidence resources. */
@@ -399,11 +382,7 @@ public final class ChunkGenerator {
         ChunkGenerator generator = new ChunkGenerator(seed,
                 Objects.requireNonNull(beardifier, "canonical Beardifier"),
                 context.densityResources(seed), context);
-        try {
-            return generator.generatePostCarversChunkData(cx, cz);
-        } finally {
-            generator.finish();
-        }
+        return generator.generatePostCarversChunkData(cx, cz);
     }
 
     public static final class GeneratedChunk {
@@ -579,11 +558,7 @@ public final class ChunkGenerator {
     /** SHA-256 counterpart of every canonical NOISE-to-CARVERS checkpoint. */
     public static String[] generatePostCarversStageSha256(int seed, int cx, int cz) {
         ChunkGenerator generator = new ChunkGenerator(seed);
-        try {
-            return generator.generatePostCarversEvidence(cx, cz).stageSha256();
-        } finally {
-            generator.finish();
-        }
+        return generator.generatePostCarversEvidence(cx, cz).stageSha256();
     }
 
     private PostCarversEvidence generatePostCarversEvidence(int cx, int cz) {
@@ -669,19 +644,9 @@ public final class ChunkGenerator {
         if(stageIndex==CANONICAL_STAGE_NAMES.length-1){StringBuilder line=new StringBuilder("TERRAIN_PROFILE chunk=").append(cx).append(',').append(cz);
             for(int i=0;i<CANONICAL_STAGE_NAMES.length;i++)line.append(' ').append(CANONICAL_STAGE_NAMES[i]).append("Ms=").append(profileStageNanos[i]/1_000_000.0);System.err.println(line);}}
 
-    /** Ends a generator that lived for one static call and hands its evaluation cache back. */
-    private void finish() {
-        DensityEvaluationCache.release(evaluationCache);
-    }
-
     /** 계약 §4 스폰 좌표 계산용 표면 높이 조회(청크 생성과 같은 높이 함수 사용). */
     public static int surfaceHeight(int seed, int worldX, int worldZ) {
-        ChunkGenerator generator = new ChunkGenerator(seed);
-        try {
-            return generator.densitySurfaceHeight(worldX, worldZ);
-        } finally {
-            generator.finish();
-        }
+        return new ChunkGenerator(seed).densitySurfaceHeight(worldX, worldZ);
     }
 
     // ── 시드 파생 계산(TS Ctx 대응) ─────────────────────────
@@ -1125,42 +1090,69 @@ public final class ChunkGenerator {
          * the same {@code NaN} on a miss, and an all-zero array still reads as empty because the
          * presence word is part of the key run.</p>
          */
-        private final int[] entries;
-        private final double[] values;
-        private final int slotCount;
+        private int[] entries;
+        private double[] values;
+        private int stamp;
         /**
-         * Presence word of a live entry. A cache is reused by the next generator on the same thread
-         * (the arrays are over 512KB, so a fresh pair per chunk was a humongous G1 allocation each
-         * time); bumping the stamp empties it exactly as a new cache would.
+         * Thread whose shared arrays this cache borrows. Each cache is about 2.5MB (over G1's 512KB
+         * humongous threshold), and one was made per generated input chunk; now every cache made on a thread
+         * shares that thread's arrays and marks its own entries with a fresh stamp, which empties it exactly as
+         * new arrays would. A cache later used from another thread switches to private arrays first, so only
+         * the owning thread ever touches the shared ones.
          */
-        private int stamp = 1;
+        private final Thread creator;
+        /** Final so a cache handed to another thread always knows the size of the private arrays it needs. */
+        private final int length;
+        private boolean detached;
 
-        /** One idle cache per thread; a nested or unreleased generator simply allocates its own. */
-        private static final ThreadLocal<DensityEvaluationCache> IDLE = new ThreadLocal<>();
+        private static final ThreadLocal<Shared> SHARED = new ThreadLocal<>();
+
+        /**
+         * Members are package-private on purpose: this class must link inside the pinned producer archive,
+         * whose ChunkGenerator nest does not list it, so no private (nestmate) access may cross it.
+         */
+        static final class Shared {
+            final int[] entries;
+            final double[] values;
+            int lastStamp;
+
+            Shared(int length) {
+                entries = new int[Math.multiplyExact(length, ENTRY_STRIDE)];
+                values = new double[length];
+            }
+
+            int nextStamp() {
+                if (++lastStamp == 0) {
+                    Arrays.fill(entries, 0);
+                    lastStamp = 1;
+                }
+                return lastStamp;
+            }
+        }
 
         DensityEvaluationCache(int slotCount) {
-            this.slotCount = slotCount;
             int length = Math.max(1, slotCount * ENTRIES_PER_SLOT);
+            Shared shared = SHARED.get();
+            if (shared == null || shared.values.length != length) {
+                shared = new Shared(length);
+                SHARED.set(shared);
+            }
+            this.length = length;
+            entries = shared.entries;
+            values = shared.values;
+            stamp = shared.nextStamp();
+            creator = Thread.currentThread();
+        }
+
+        private void leaveSharedArrays() {
             entries = new int[Math.multiplyExact(length, ENTRY_STRIDE)];
             values = new double[length];
-        }
-
-        static DensityEvaluationCache acquire(int slotCount) {
-            DensityEvaluationCache idle = IDLE.get();
-            if (idle == null || idle.slotCount != slotCount) return new DensityEvaluationCache(slotCount);
-            IDLE.remove();
-            if (++idle.stamp == 0) {
-                Arrays.fill(idle.entries, 0);
-                idle.stamp = 1;
-            }
-            return idle;
-        }
-
-        static void release(DensityEvaluationCache cache) {
-            IDLE.set(cache);
+            stamp = 1;
+            detached = true;
         }
 
         @Override public double get(int slot, int x, int y, int z) {
+            if (!detached && creator != Thread.currentThread()) leaveSharedArrays();
             int index = index(slot, x, y, z);
             int key = index * ENTRY_STRIDE;
             if (entries[key + 3] != stamp || entries[key] != x || entries[key + 1] != y
@@ -1171,6 +1163,7 @@ public final class ChunkGenerator {
         }
 
         @Override public void put(int slot, int x, int y, int z, double value) {
+            if (!detached && creator != Thread.currentThread()) leaveSharedArrays();
             int index = index(slot, x, y, z);
             int key = index * ENTRY_STRIDE;
             entries[key] = x;

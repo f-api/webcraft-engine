@@ -20,7 +20,7 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 final class ProducerBundle {
-    private static final String SHA256 = "abdfa334ea533f85172b437bc11b9340a7735d896817ce8ec6e17632c6aee6f7";
+    private static final String SHA256 = "a4caebe4f454b916e1dd1c320b20cbf27179396ad3ae905987b6ea2725761aed";
     private static Path resolved;
 
     private ProducerBundle() { }

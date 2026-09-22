@@ -57,9 +57,9 @@ public final class LegacyCarrierOperations {
                 chunk.blockIds(),chunk.stateOverrides(),chunk.worldSurfaceWg(),chunk.oceanFloorWg(),
                 chunk.motionBlocking(),filtered));
         byte[] projection=LegacyProducerWorker.project(Mc263FinalChunkCodec.decode(raw));
-        var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);
+        var bytes=new WorkerBytes(4+1+4L+raw.length+4+projection.length);var out=new DataOutputStream(bytes);
         out.writeInt(0x57504731);out.writeByte(1);out.writeInt(raw.length);out.write(raw);
-        out.writeInt(projection.length);out.write(projection);out.flush();return bytes.toByteArray();
+        out.writeInt(projection.length);out.write(projection);out.flush();return bytes.exact();
     }
 
     public static byte[] defaults(DataInputStream in) throws IOException {

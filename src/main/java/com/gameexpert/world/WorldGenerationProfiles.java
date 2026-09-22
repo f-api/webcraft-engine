@@ -12,7 +12,7 @@ public final class WorldGenerationProfiles {
     public static final WorldGenerationProfile CURRENT = new WorldGenerationProfile(
             "webcraft-26.3-post7-v1+ga0cb4e2379cd73082d2bebe0",
             "f32a9620a9f1d4fb987a256f90bd271c69409561ea79ff6eeff1e934351c7a7a",
-            "b040fc775e1436f4f6ddfd80a944aee52a1603755e87bfbeebba20cc94e15984",
+            "0d4da081991f468d72a6f0773b17f652bb62a119d7656ae6b0320d865da06a3a",
             5009,
             115,
             95,

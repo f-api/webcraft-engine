@@ -119,11 +119,13 @@ public final class IsolatedProducerSession implements AutoCloseable {
         ClassLoader previous = Thread.currentThread().getContextClassLoader();
         try {
             Thread.currentThread().setContextClassLoader(loader);
-            byte[] response = (byte[]) dispatch.invoke(null, (Object) request.clone());
+            // Both sides build a fresh frame per call and never reuse it, so the multi-megabyte carrier frames
+            // cross without the two defensive copies they used to cost.
+            byte[] response = (byte[]) dispatch.invoke(null, (Object) request);
             if (response == null || response.length == 0 || response.length > MAX_MESSAGE_BYTES) {
                 throw new IllegalStateException("producer response exceeds bounds");
             }
-            return response.clone();
+            return response;
         } catch (InvocationTargetException failure) {
             // Do not leak private producer exceptions/objects across the boundary.
             Throwable cause = failure.getCause();
