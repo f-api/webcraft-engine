@@ -54,6 +54,9 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
      */
     private volatile DataSource renewalSource;
     private volatile AutoCloseable renewalPool;
+    /** Held for the process lifetime when fences are unavailable, so a second server cannot start. */
+    private volatile Connection singleServerLock;
+    private volatile String singleServerLockName;
     private final Environment environment;
     private final ConcurrentMap<Long, Held> held = new ConcurrentHashMap<>();
     private final Set<Long> retired = ConcurrentHashMap.newKeySet();
@@ -86,7 +89,16 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
                 if (!r.next()) throw new SQLException("Missing database identity");
                 namespace = "webcraft:game:v1:" + SqlWriteFences.digest(r.getString(1)).substring(0, 24);
             }
-            SqlWriteFences.install(c);
+            try {
+                SqlWriteFences.install(c);
+            } catch (SQLException failure) {
+                if (!fenceTriggersNeedPrivilege(failure)) throw failure;
+                holdSingleServer(namespace);
+                log.warn("Write fences need MySQL triggers, which this account may not create while binary"
+                        + " logging is on (RDS default). Running as a single server; set the parameter"
+                        + " log_bin_trust_function_creators=1 to run several servers on this database.");
+                return;
+            }
             enabled = true;
             active = this;
             openRenewalPool();
@@ -309,6 +321,77 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
     public void runtimeDiscarded(long root) {
         if (retired.contains(root) && lastHeld.containsKey(root)) recoverable.add(root);
     }
+    /** MySQL 1419: CREATE TRIGGER needs SUPER (or the trust parameter) while binary logging is on. */
+    private static boolean fenceTriggersNeedPrivilege(Throwable failure) {
+        for (Throwable cause = failure; cause != null; cause = cause.getCause()) {
+            if (cause instanceof SQLException sql && sql.getErrorCode() == 1419) return true;
+        }
+        return false;
+    }
+
+    /**
+     * Without fences two servers would simulate the same worlds and overwrite each other. A named
+     * lock on a connection kept for the process lifetime lets exactly one server run; another server
+     * on the same database refuses to start. A keepalive stops the idle timeout from dropping it.
+     */
+    private void holdSingleServer(String name) {
+        String lock = "webcraft:single:" + name.substring(name.length() - 24);
+        try {
+            Connection connection = dataSource.getConnection();
+            try (PreparedStatement q = connection.prepareStatement("SELECT GET_LOCK(?,0)")) {
+                q.setString(1, lock);
+                try (ResultSet r = q.executeQuery()) {
+                    if (!r.next() || r.getInt(1) != 1) {
+                        connection.close();
+                        throw new IllegalStateException("Another server is already running on this database."
+                                + " Several servers need the MySQL parameter log_bin_trust_function_creators=1.");
+                    }
+                }
+            }
+            singleServerLock = connection;
+            singleServerLockName = lock;
+            renewals.scheduleWithFixedDelay(this::keepSingleServer, 60, 60, TimeUnit.SECONDS);
+        } catch (SQLException failure) {
+            throw new IllegalStateException("Cannot take the single-server database lock", failure);
+        }
+    }
+
+    private void keepSingleServer() {
+        Connection connection = singleServerLock;
+        if (connection == null || closed) return;
+        try (PreparedStatement q = connection.prepareStatement("SELECT IS_USED_LOCK(?) = CONNECTION_ID()")) {
+            q.setString(1, singleServerLockName);
+            try (ResultSet r = q.executeQuery()) {
+                if (r.next() && r.getInt(1) == 1) return;
+            }
+        } catch (SQLException failure) {
+            log.warn("Single-server database lock connection failed; taking it again", failure);
+        }
+        try { connection.close(); } catch (SQLException ignored) { }
+        singleServerLock = null;
+        try {
+            holdSingleServerAgain();
+        } catch (RuntimeException failure) {
+            log.error("Single-server database lock lost and could not be taken again", failure);
+        }
+    }
+
+    private void holdSingleServerAgain() {
+        try {
+            Connection connection = dataSource.getConnection();
+            try (PreparedStatement q = connection.prepareStatement("SELECT GET_LOCK(?,0)")) {
+                q.setString(1, singleServerLockName);
+                try (ResultSet r = q.executeQuery()) {
+                    if (r.next() && r.getInt(1) == 1) { singleServerLock = connection; return; }
+                }
+            }
+            connection.close();
+            throw new IllegalStateException("Another server took the single-server database lock");
+        } catch (SQLException failure) {
+            throw new IllegalStateException("Cannot take the single-server database lock again", failure);
+        }
+    }
+
     private Connection renewalConnection() throws SQLException {
         DataSource source = renewalSource;
         return (source == null ? dataSource : source).getConnection();
@@ -350,6 +433,11 @@ public final class WorldAuthority implements SmartInitializingSingleton, AutoClo
     @Override @jakarta.annotation.PreDestroy public void close() {
         closed = true;
         renewals.shutdownNow();
+        Connection single = singleServerLock;
+        singleServerLock = null;
+        if (single != null) {
+            try { single.close(); } catch (SQLException failure) { log.debug("Single-server lock close failed", failure); }
+        }
         AutoCloseable pool = renewalPool;
         renewalPool = null;
         if (pool != null) {
