@@ -53,12 +53,12 @@ public final class CanonicalWorldgenBaseBlockAuthority
         }
         var carrier = commit.semanticFinalChunk();
         if (carrier.chunkX() != chunkX || carrier.chunkZ() != chunkZ
-                || carrier.blockIds().length != Blocks.CHUNK_BLOCKS) {
+                || carrier.blockIdCount() != Blocks.CHUNK_BLOCKS) {
             throw new IllegalStateException("canonical explosion carrier is malformed");
         }
         int packed = Blocks.blockIndex(Math.floorMod(transition.x(), Blocks.CHUNK_X),
                 transition.y(), Math.floorMod(transition.z(), Blocks.CHUNK_Z));
-        short blockType = carrier.blockIds()[packed];
+        short blockType = carrier.blockIdAt(packed);
         var exactState = carrier.stateOverrides().get(packed);
         int stateCode = exactState == null ? 0 : exactState.stateCode();
         if (stateCode < 0 || stateCode > Short.MAX_VALUE) {

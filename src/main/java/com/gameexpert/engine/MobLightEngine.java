@@ -639,15 +639,22 @@ final class MobLightEngine {
 
 
     private static final class ColumnLightCache {
+        private static final int SECTION_BLOCKS = 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
+        private static final int SECTION_MASK = SECTION_BLOCKS - 1;
         private TerrainAccessor.SnapshotSource source;
-        private final short[] blockTypes = new short[Blocks.CHUNK_BLOCKS];
-        private final byte[] blockStates = new byte[Blocks.CHUNK_BLOCKS];
+        private static final byte[] NO_STATES = new byte[SECTION_BLOCKS];
+        // Sections are filled on first use. A section the source did not change after generation reads the
+        // source's own immutable generated array (at typeBase = section start) instead of a private copy, and
+        // one without block states reads NO_STATES; only edited sections cost memory here. Shared arrays are
+        // never written: rebind() copies a section before patching it.
+        private final short[][] blockTypes = new short[Blocks.CHUNK_Y / 16][];
+        private final int[] typeBase = new int[Blocks.CHUNK_Y / 16];
+        private final byte[][] blockStates = new byte[Blocks.CHUNK_Y / 16][];
         private final short[] top = new short[Blocks.CHUNK_X * Blocks.CHUNK_Z];
         private final short[] occupiedTop = new short[Blocks.CHUNK_X * Blocks.CHUNK_Z];
         private final short[] motionBlockingNoLeavesTop =
                 new short[Blocks.CHUNK_X * Blocks.CHUNK_Z];
         private final boolean[] dirtyColumns = new boolean[Blocks.CHUNK_X * Blocks.CHUNK_Z];
-        private final boolean[] loadedSections = new boolean[Blocks.CHUNK_Y / 16];
         private int knownEmissionSections;
         private int presentEmissionSections;
         private boolean sourceMayChange;
@@ -661,23 +668,24 @@ final class MobLightEngine {
 
         private boolean hasEmission(int minY, int maxY) {
             int firstSection = Math.max(0, (minY - Blocks.MIN_Y) >> 4);
-            int lastSection = Math.min(loadedSections.length - 1,
+            int lastSection = Math.min(blockTypes.length - 1,
                     (maxY - Blocks.MIN_Y) >> 4);
             if (firstSection > lastSection) return false;
             for (int section = firstSection; section <= lastSection; section++) {
                 int bit = 1 << section;
                 if ((knownEmissionSections & bit) == 0) {
                     ensureSection(section);
-                    int start = section * 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
-                    int end = start + 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
+                    short[] types = blockTypes[section];
+                    int base = typeBase[section];
+                    byte[] states = blockStates[section];
                     boolean present = false;
-                    for (int index = start; index < end; index++) {
-                        int id = Short.toUnsignedInt(blockTypes[index]);
+                    for (int index = 0; index < SECTION_BLOCKS; index++) {
+                        int id = Short.toUnsignedInt(types[base + index]);
                         int state = id == Blocks.CAMPFIRE
                                 || id == Blocks.CAVE_VINES || id == Blocks.CAVE_VINES_PLANT
                                 || id == Blocks.TRIAL_SPAWNER || id == Blocks.VAULT
                                 || id == Blocks.CAULDRON
-                                ? Byte.toUnsignedInt(blockStates[index]) : 0;
+                                ? Byte.toUnsignedInt(states[index]) : 0;
                         if (emission(id, state) > 0) {
                             present = true;
                             break;
@@ -713,10 +721,11 @@ final class MobLightEngine {
                 int localZ = column / Blocks.CHUNK_X;
                 for (int y = Blocks.MIN_Y; y <= Blocks.MAX_Y; y++) {
                     int section = (y - Blocks.MIN_Y) >> 4;
-                    if (!loadedSections[section]) continue;
+                    if (blockTypes[section] == null) continue;
+                    privatize(section);
                     int index = Blocks.blockIndex(localX, y, localZ);
-                    blockTypes[index] = (short) replacement.blockTypeAt(index);
-                    blockStates[index] = (byte) replacement.blockStateAt(index);
+                    blockTypes[section][index & SECTION_MASK] = (short) replacement.blockTypeAt(index);
+                    blockStates[section][index & SECTION_MASK] = (byte) replacement.blockStateAt(index);
                 }
                 dirtyColumns[column] = false;
             }
@@ -724,19 +733,45 @@ final class MobLightEngine {
         }
 
         private int blockTypeAt(int index) {
-            ensureSection(index >>> 12);
-            return Short.toUnsignedInt(blockTypes[index]);
+            int section = index >>> 12;
+            short[] types = blockTypes[section];
+            if (types == null) types = ensureSection(section);
+            return Short.toUnsignedInt(types[typeBase[section] + (index & SECTION_MASK)]);
         }
 
         private int blockStateAt(int index) {
-            ensureSection(index >>> 12);
-            return Byte.toUnsignedInt(blockStates[index]);
+            if (blockStates[index >>> 12] == null) ensureSection(index >>> 12);
+            return Byte.toUnsignedInt(blockStates[index >>> 12][index & SECTION_MASK]);
         }
 
-        private void ensureSection(int section) {
-            if (loadedSections[section]) return;
-            source.copySectionTo(section, blockTypes, blockStates);
-            loadedSections[section] = true;
+        private short[] ensureSection(int section) {
+            short[] types = blockTypes[section];
+            if (types != null) return types;
+            short[] generated = source.unchangedSectionTypes(section);
+            boolean noStates = source.sectionHasNoStates(section);
+            byte[] states = noStates ? NO_STATES : new byte[SECTION_BLOCKS];
+            if (generated != null) {
+                types = generated;
+                typeBase[section] = section * SECTION_BLOCKS;
+                if (!noStates) source.copySectionInto(section, null, states);
+            } else {
+                types = new short[SECTION_BLOCKS];
+                typeBase[section] = 0;
+                source.copySectionInto(section, types, noStates ? null : states);
+            }
+            blockTypes[section] = types;
+            blockStates[section] = states;
+            return types;
+        }
+
+        /** Gives a loaded section private arrays so it can be patched without touching shared ones. */
+        private void privatize(int section) {
+            if (typeBase[section] != 0 || blockTypes[section].length != SECTION_BLOCKS) {
+                blockTypes[section] = Arrays.copyOfRange(blockTypes[section], typeBase[section],
+                        typeBase[section] + SECTION_BLOCKS);
+                typeBase[section] = 0;
+            }
+            if (blockStates[section] == NO_STATES) blockStates[section] = new byte[SECTION_BLOCKS];
         }
     }
 

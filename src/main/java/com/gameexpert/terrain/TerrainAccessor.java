@@ -576,25 +576,87 @@ public final class TerrainAccessor {
          * use this bulk merge instead of repeating sparse hash/ordinal lookups for every cell.
          */
         public void copySectionTo(int section, short[] types, byte[] states) {
-            int sectionCount = Blocks.CHUNK_Y / 16;
-            if (section < 0 || section >= sectionCount
-                    || types.length != Blocks.CHUNK_BLOCKS
-                    || states.length != Blocks.CHUNK_BLOCKS) {
+            if (types.length != Blocks.CHUNK_BLOCKS || states.length != Blocks.CHUNK_BLOCKS) {
                 throw new IllegalArgumentException("청크 section snapshot 범위가 올바르지 않습니다");
             }
-            int start = section * 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
-            int end = start + 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
-            for (int index = start; index < end; index++) {
-                types[index] = generatedBlocks[index];
+            copySection(section, types, states, section * SECTION_BLOCKS);
+        }
+
+        /**
+         * Copies one section into section-sized arrays (index 0 is the section's lowest cell). Either
+         * array may be null when the caller does not need that half.
+         */
+        public void copySectionInto(int section, short[] types, byte[] states) {
+            if ((types != null && types.length != SECTION_BLOCKS)
+                    || (states != null && states.length != SECTION_BLOCKS)) {
+                throw new IllegalArgumentException("section snapshot 배열 크기가 올바르지 않습니다");
             }
-            Arrays.fill(states, start, end, (byte) 0);
-            applyFinalStates(states, start, end);
+            copySection(section, types, states, 0);
+        }
+
+        /**
+         * The generated array itself when no patch or override changes a block type in this section, else
+         * null. The array is shared and must not be written; index it at {@code section * 4096}.
+         */
+        public short[] unchangedSectionTypes(int section) {
+            int start = section * SECTION_BLOCKS;
+            int end = start + SECTION_BLOCKS;
+            int ordinal = replayablePatch.firstOrdinalAtOrAfter(start);
+            if (ordinal < replayablePatch.size() && replayablePatch.blockIndexAt(ordinal) < end) return null;
+            for (int encoded : overrideKeys) {
+                if (encoded != 0 && encoded - 1 >= start && encoded - 1 < end) return null;
+            }
+            return generatedBlocks;
+        }
+
+        /** True when every cell of the section has block state 0. */
+        public boolean sectionHasNoStates(int section) {
+            int start = section * SECTION_BLOCKS;
+            int end = start + SECTION_BLOCKS;
+            for (int slot = 0; slot < finalStateKeys.length; slot++) {
+                int encoded = finalStateKeys[slot];
+                if (encoded != 0 && encoded - 1 >= start && encoded - 1 < end
+                        && finalStateCodes[slot] != 0) return false;
+            }
+            int ordinal = replayablePatch.firstOrdinalAtOrAfter(start);
+            while (ordinal < replayablePatch.size()) {
+                if (replayablePatch.blockIndexAt(ordinal) >= end) break;
+                if (replayablePatch.blockStateAtOrdinal(ordinal) != 0) return false;
+                ordinal++;
+            }
+            for (int slot = 0; slot < overrideKeys.length; slot++) {
+                int encoded = overrideKeys[slot];
+                if (encoded != 0 && encoded - 1 >= start && encoded - 1 < end
+                        && overrideStates[slot] != 0) return false;
+            }
+            return true;
+        }
+
+        private static final int SECTION_BLOCKS = 16 * Blocks.CHUNK_X * Blocks.CHUNK_Z;
+
+        private void copySection(int section, short[] types, byte[] states, int offset) {
+            if (section < 0 || section >= Blocks.CHUNK_Y / 16) {
+                throw new IllegalArgumentException("청크 section snapshot 범위가 올바르지 않습니다");
+            }
+            int start = section * SECTION_BLOCKS;
+            int end = start + SECTION_BLOCKS;
+            int shift = offset - start;
+            if (types != null) System.arraycopy(generatedBlocks, start, types, offset, SECTION_BLOCKS);
+            if (states != null) {
+                Arrays.fill(states, offset, offset + SECTION_BLOCKS, (byte) 0);
+                for (int slot = 0; slot < finalStateKeys.length; slot++) {
+                    int encoded = finalStateKeys[slot];
+                    if (encoded == 0) continue;
+                    int index = encoded - 1;
+                    if (index >= start && index < end) states[index + shift] = finalStateCodes[slot];
+                }
+            }
             int ordinal = replayablePatch.firstOrdinalAtOrAfter(start);
             while (ordinal < replayablePatch.size()) {
                 int index = replayablePatch.blockIndexAt(ordinal);
                 if (index >= end) break;
-                types[index] = (short) replayablePatch.blockTypeAtOrdinal(ordinal);
-                states[index] = (byte) replayablePatch.blockStateAtOrdinal(ordinal);
+                if (types != null) types[index + shift] = (short) replayablePatch.blockTypeAtOrdinal(ordinal);
+                if (states != null) states[index + shift] = (byte) replayablePatch.blockStateAtOrdinal(ordinal);
                 ordinal++;
             }
             for (int slot = 0; slot < overrideKeys.length; slot++) {
@@ -602,8 +664,8 @@ public final class TerrainAccessor {
                 if (encoded == 0) continue;
                 int index = encoded - 1;
                 if (index < start || index >= end) continue;
-                types[index] = overrideTypes[slot];
-                states[index] = overrideStates[slot];
+                if (types != null) types[index + shift] = overrideTypes[slot];
+                if (states != null) states[index + shift] = overrideStates[slot];
             }
         }
 
@@ -627,7 +689,17 @@ public final class TerrainAccessor {
         }
     }
 
-    private static final int GEN_CACHE_LIMIT = 512;
+    /**
+     * 512 chunks once the heap has room (900MB+). The JVM's default heap is a quarter of RAM, so a 2GB host
+     * starts with ~500MB; keeping 512 chunks there spends most of it on terrain the players already left.
+     * Current players' neighborhoods are never evicted, so a smaller target only shortens travel history.
+     */
+    private static final int GEN_CACHE_LIMIT = generatedCacheLimit(Runtime.getRuntime().maxMemory());
+
+    static int generatedCacheLimit(long maxHeapBytes) {
+        long heapMb = maxHeapBytes >> 20;
+        return (int) Math.max(192, Math.min(512, heapMb - 250));
+    }
 
     private final int seed;
     private final Long worldId;

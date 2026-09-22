@@ -66,7 +66,7 @@ public final class CanonicalStoreChunkProductSource implements ChunkProductSourc
         if (carrier.chunkX() != chunkX || carrier.chunkZ() != chunkZ) {
             throw new IllegalStateException("canonical carrier coordinates do not match request");
         }
-        if (carrier.blockIds().length != Blocks.CHUNK_BLOCKS
+        if (carrier.blockIdCount() != Blocks.CHUNK_BLOCKS
                 || carrier.worldSurfaceWg().length != Blocks.CHUNK_X * Blocks.CHUNK_Z) {
             throw new IllegalStateException("canonical carrier arrays are malformed");
         }

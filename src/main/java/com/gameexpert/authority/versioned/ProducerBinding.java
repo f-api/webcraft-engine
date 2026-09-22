@@ -10,18 +10,47 @@ import static com.gameexpert.authority.versioned.NeutralFinalChunk.*;
 final class ProducerBinding {
     private final IsolatedProducerSession producer;
     private final WorldGenerationProfile profile;
-    private final byte[] carrier;
+    /** Deflated carrier bytes; producer calls are rare, so a resident chunk keeps them compact. */
+    private final byte[] packedCarrier;
+    private final int carrierLength;
     private final Map<Integer, StateOverride> defaults = new ConcurrentHashMap<>();
     ProducerBinding(IsolatedProducerSession producer, WorldGenerationProfile profile, byte[] carrier) {
         this.producer=Objects.requireNonNull(producer); this.profile=Objects.requireNonNull(profile);
-        this.carrier=carrier.clone();
+        this.carrierLength=carrier.length;
+        this.packedCarrier=deflate(carrier);
     }
-    byte[] encodedCarrier() { return carrier.clone(); }
+    byte[] encodedCarrier() { return carrier(); }
+    private byte[] carrier() {
+        var inflater=new java.util.zip.Inflater();
+        try {
+            inflater.setInput(packedCarrier);
+            byte[] out=new byte[carrierLength];
+            int n=0;
+            while(n<carrierLength){
+                int read=inflater.inflate(out,n,carrierLength-n);
+                if(read==0&&(inflater.finished()||inflater.needsInput()))break;
+                n+=read;
+            }
+            if(n!=carrierLength||!inflater.finished())throw new IllegalStateException("retained carrier is corrupt");
+            return out;
+        } catch(java.util.zip.DataFormatException corrupt){throw new IllegalStateException("retained carrier is corrupt",corrupt);}
+        finally{inflater.end();}
+    }
+    private static byte[] deflate(byte[] raw) {
+        var deflater=new java.util.zip.Deflater(java.util.zip.Deflater.BEST_SPEED);
+        try {
+            deflater.setInput(raw);deflater.finish();
+            var out=new ByteArrayOutputStream(Math.max(64,raw.length/8));byte[] buffer=new byte[8192];
+            while(!deflater.finished()){int n=deflater.deflate(buffer);out.write(buffer,0,n);}
+            return out.toByteArray();
+        } finally{deflater.end();}
+    }
     WorldGenerationProfile generationProfile(){return profile;}
     NeutralFinalChunk verify(int chunkX, int chunkZ, byte[] encoded) { return NeutralFinalChunkWire.verify(producer, profile, chunkX, chunkZ, encoded); }
     NeutralFinalChunk select(NeutralFinalChunk source, Sidecars selected) {
         Objects.requireNonNull(selected);
         if(source.sidecars().equals(selected)) return source;
+        final byte[] carrier=carrier();
         try {
             var bytes=new ByteArrayOutputStream();var out=new DataOutputStream(bytes);header(out,4);
             out.writeInt(source.chunkX());out.writeInt(source.chunkZ());out.writeInt(carrier.length);out.write(carrier);
@@ -41,6 +70,7 @@ final class ProducerBinding {
         } catch(IOException malformed) { throw new IllegalArgumentException("invalid producer subset response",malformed); }
     }
     boolean matchesCanonicalMob(NeutralFinalChunk source, StructureEntity row) {
+        final byte[] carrier=carrier();
         Objects.requireNonNull(row);
         int ordinal=source.sidecars().entities().indexOf(row);
         if(ordinal<0) throw new IllegalArgumentException("entity is not part of verified carrier");
@@ -54,6 +84,7 @@ final class ProducerBinding {
         } catch(IOException malformed) { throw new IllegalArgumentException("invalid canonical mob response",malformed); }
     }
     byte[] renderPreview(NeutralFinalChunk source, long seed, TargetMap target, boolean seaLevel) {
+        final byte[] carrier=carrier();
         Objects.requireNonNull(target);
         int declaration=-1, targetOrdinal=-1;
         for(int i=0;i<source.sidecars().containerLootDeclarations().size();i++) {
@@ -72,6 +103,7 @@ final class ProducerBinding {
         } catch(IOException malformed) { throw new IllegalArgumentException("invalid verified preview response",malformed); }
     }
     byte[] loot(NeutralFinalChunk source, boolean resolve, byte[] context, long seed, String table, long rawSeed, int x, int y, int z, int slots, Long initialLo, Long initialHi) {
+        final byte[] carrier=carrier();
         Objects.requireNonNull(context);if(context.length==0||context.length>16384)throw new IllegalArgumentException("invalid loot context size");
         if((initialLo==null)!=(initialHi==null))throw new IllegalArgumentException("incomplete named loot sequence");
         try {
@@ -90,6 +122,7 @@ final class ProducerBinding {
     LateLootOutcome lateLoot(NeutralFinalChunk source,byte[] context,long seed,String table,long rawSeed,
             int x,int y,int z,int slots,Long initialLo,Long initialHi,
             CanonicalStructureSnapshot snapshot,List<LateLootOutcome.Claim> claims) {
+        final byte[] carrier=carrier();
         Objects.requireNonNull(context);Objects.requireNonNull(snapshot);Objects.requireNonNull(claims);
         if(!profile.equals(snapshot.profile()))throw new IllegalArgumentException("late loot snapshot profile differs");
         if(context.length==0||context.length>16384||(initialLo==null)!=(initialHi==null))throw new IllegalArgumentException("invalid late loot request");

@@ -48,7 +48,7 @@ public final class NeutralFinalChunk {
     public byte[] renderVerifiedMapPreview(long worldSeed, TargetMap target, boolean seaLevel) { return producer().renderPreview(this, worldSeed, target, seaLevel); }
     private final int chunkX;
     private final int chunkZ;
-    private final short[] blockIds;
+    private final PackedBlockIds blockIds;
     private final Map<Integer, StateOverride> stateOverrides;
     private final int[] worldSurfaceWg;
     private final int[] oceanFloorWg;
@@ -57,7 +57,7 @@ public final class NeutralFinalChunk {
     public NeutralFinalChunk(int chunkX, int chunkZ, short[] blockIds, Map<Integer, StateOverride> stateOverrides, int[] worldSurfaceWg, int[] oceanFloorWg, int[] motionBlocking, Sidecars sidecars) {
         this.chunkX = chunkX;
         this.chunkZ = chunkZ;
-        this.blockIds = blockIds.clone();
+        this.blockIds = PackedBlockIds.pack(blockIds);
         this.stateOverrides = Map.copyOf(stateOverrides);
         this.worldSurfaceWg = worldSurfaceWg.clone();
         this.oceanFloorWg = oceanFloorWg.clone();
@@ -66,7 +66,9 @@ public final class NeutralFinalChunk {
     }
     public int chunkX() { return chunkX; }
     public int chunkZ() { return chunkZ; }
-    public short[] blockIds() { return blockIds.clone(); }
+    public short[] blockIds() { return blockIds.unpack(); }
+    public int blockIdCount() { return blockIds.length; }
+    public short blockIdAt(int index) { return blockIds.get(index); }
     public Map<Integer, StateOverride> stateOverrides() { return stateOverrides; }
     public int[] worldSurfaceWg() { return worldSurfaceWg.clone(); }
     public int[] oceanFloorWg() { return oceanFloorWg.clone(); }
@@ -75,9 +77,9 @@ public final class NeutralFinalChunk {
     @Override public boolean equals(Object other) {
         if (this==other) return true;
         if (!(other instanceof NeutralFinalChunk value)) return false;
-        return chunkX==value.chunkX && chunkZ==value.chunkZ && Arrays.equals(blockIds,value.blockIds) && Objects.equals(stateOverrides,value.stateOverrides) && Arrays.equals(worldSurfaceWg,value.worldSurfaceWg) && Arrays.equals(oceanFloorWg,value.oceanFloorWg) && Arrays.equals(motionBlocking,value.motionBlocking) && Objects.equals(sidecars,value.sidecars);
+        return chunkX==value.chunkX && chunkZ==value.chunkZ && blockIds.equals(value.blockIds) && Objects.equals(stateOverrides,value.stateOverrides) && Arrays.equals(worldSurfaceWg,value.worldSurfaceWg) && Arrays.equals(oceanFloorWg,value.oceanFloorWg) && Arrays.equals(motionBlocking,value.motionBlocking) && Objects.equals(sidecars,value.sidecars);
     }
-    @Override public int hashCode() { return Objects.hash(chunkX,chunkZ,Arrays.hashCode(blockIds),stateOverrides,Arrays.hashCode(worldSurfaceWg),Arrays.hashCode(oceanFloorWg),Arrays.hashCode(motionBlocking),sidecars); }
+    @Override public int hashCode() { return Objects.hash(chunkX,chunkZ,blockIds.hashCode(),stateOverrides,Arrays.hashCode(worldSurfaceWg),Arrays.hashCode(oceanFloorWg),Arrays.hashCode(motionBlocking),sidecars); }
     public enum ContainerLootSourceSection { LOOT, ENTS }
     public enum TickPriority {
         EXTREMELY_HIGH(-3), VERY_HIGH(-2), HIGH(-1), NORMAL(0), LOW(1), VERY_LOW(2), EXTREMELY_LOW(3);
@@ -100,12 +102,13 @@ public final class NeutralFinalChunk {
             this(packed,blockId,stateCode,exactState,leavesTag,"minecraft:empty");
         }
         public StateOverride(int packed, int blockId, int stateCode, String exactState, boolean leavesTag, String fluidTypeKey) {
-            this.fluidTypeKey = Objects.requireNonNull(fluidTypeKey);
+            // Resident chunks hold tens of thousands of these over a small vocabulary of state strings.
+            this.fluidTypeKey = Objects.requireNonNull(fluidTypeKey).intern();
             this.leavesTag = leavesTag;
             this.packed = packed;
             this.blockId = blockId;
             this.stateCode = stateCode;
-            this.exactState = Objects.requireNonNull(exactState);
+            this.exactState = Objects.requireNonNull(exactState).intern();
         }
         public int packed() { return packed; }
         public int blockId() { return blockId; }
@@ -132,7 +135,7 @@ public final class NeutralFinalChunk {
             position(packed); unsigned16(blockId); NeutralFinalChunk.key(key); nonnegative(delay);
             this.packed = packed;
             this.blockId = blockId;
-            this.key = Objects.requireNonNull(key);
+            this.key = Objects.requireNonNull(key).intern();
             this.delay = delay;
             this.priority = Objects.requireNonNull(priority);
             this.subTickOrder = subTickOrder;
@@ -637,5 +640,90 @@ public final class NeutralFinalChunk {
             boolean alnum=c>='a'&&c<='z'||c>='0'&&c<='9';
             if(c>127 || (!alnum && c!='_' && c!='-' && c!='.' && (i<colon || c!='/'))) throw new IllegalArgumentException("invalid canonical key");
         }
+    }
+
+    /**
+     * Palette-packed copy of the carrier's block IDs. A resident chunk already keeps a plain short[] for
+     * the runtime; this retained projection is read rarely, so it holds a few bits per cell instead of
+     * another 196KB array.
+     */
+    private static final class PackedBlockIds {
+        private final int length;
+        private final short[] palette;
+        private final int bits;
+        private final long[] words;
+        private final int hash;
+
+        private PackedBlockIds(int length, short[] palette, int bits, long[] words, int hash) {
+            this.length = length;
+            this.palette = palette;
+            this.bits = bits;
+            this.words = words;
+            this.hash = hash;
+        }
+
+        /** Per-thread block ID -> palette slot + 1; pack() resets the entries it used before returning. */
+        private static final ThreadLocal<int[]> SLOT_OF = ThreadLocal.withInitial(() -> new int[65536]);
+
+        static PackedBlockIds pack(short[] ids) {
+            int[] slotOf = SLOT_OF.get();
+            try {
+                return pack(ids, slotOf);
+            } finally {
+                Arrays.fill(slotOf, 0);
+            }
+        }
+
+        private static PackedBlockIds pack(short[] ids, int[] slotOf) {
+            short[] palette = new short[16];
+            int size = 0;
+            for (short id : ids) {
+                int key = Short.toUnsignedInt(id);
+                if (slotOf[key] != 0) continue;
+                if (size == palette.length) palette = Arrays.copyOf(palette, size * 2);
+                palette[size++] = id;
+                slotOf[key] = size;
+            }
+            palette = Arrays.copyOf(palette, size);
+            int bits = size <= 1 ? 0 : 32 - Integer.numberOfLeadingZeros(size - 1);
+            long[] words = new long[bits == 0 ? 0 : (int) (((long) ids.length * bits + 63) >>> 6)];
+            if (bits != 0) {
+                long mask = (1L << bits) - 1;
+                for (int index = 0; index < ids.length; index++) {
+                    long value = (slotOf[Short.toUnsignedInt(ids[index])] - 1) & mask;
+                    long bit = (long) index * bits;
+                    int word = (int) (bit >>> 6);
+                    int offset = (int) (bit & 63);
+                    words[word] |= value << offset;
+                    if (offset + bits > 64) words[word + 1] |= value >>> (64 - offset);
+                }
+            }
+            return new PackedBlockIds(ids.length, palette, bits, words, Arrays.hashCode(ids));
+        }
+
+        short get(int index) {
+            if (index < 0 || index >= length) throw new ArrayIndexOutOfBoundsException(index);
+            if (bits == 0) return palette[0];
+            long bit = (long) index * bits;
+            int word = (int) (bit >>> 6);
+            int offset = (int) (bit & 63);
+            long value = words[word] >>> offset;
+            if (offset + bits > 64) value |= words[word + 1] << (64 - offset);
+            return palette[(int) (value & ((1L << bits) - 1))];
+        }
+
+        short[] unpack() {
+            short[] ids = new short[length];
+            for (int index = 0; index < length; index++) ids[index] = get(index);
+            return ids;
+        }
+
+        @Override public boolean equals(Object other) {
+            if (this == other) return true;
+            if (!(other instanceof PackedBlockIds value)) return false;
+            return length == value.length && hash == value.hash && Arrays.equals(unpack(), value.unpack());
+        }
+
+        @Override public int hashCode() { return hash; }
     }
 }

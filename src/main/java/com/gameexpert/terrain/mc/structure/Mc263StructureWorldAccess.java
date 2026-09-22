@@ -393,7 +393,10 @@ public final class Mc263StructureWorldAccess implements Mc263StructureSetStartPl
         }
 
         void clear() {
-            java.util.Arrays.fill(values, ABSENT);
+            // One wide structure decision can grow this to a million slots; do not keep that for the
+            // next, ordinary decision.
+            if (keys.length > 1 << 16) allocate(1 << 12);
+            else java.util.Arrays.fill(values, ABSENT);
             size = 0;
         }
 
