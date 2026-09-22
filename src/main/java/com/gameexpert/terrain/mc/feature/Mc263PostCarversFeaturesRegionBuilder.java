@@ -49,25 +49,38 @@ public final class Mc263PostCarversFeaturesRegionBuilder {
 
     /** Stable big-endian Java/Rust evidence for the complete immutable builder boundary. */
     public static byte[] receipt(RegionInput input) {
+        return receiptView(input).clone();
+    }
+
+    /**
+     * The same receipt, built once per immutable input and shared. Callers must not modify it. One
+     * production reads it several times, and at about 5MB each rebuild was a large G1 allocation.
+     */
+    static byte[] receiptView(RegionInput input) {
         Objects.requireNonNull(input, "FEATURES region input");
-        try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream output = new DataOutputStream(bytes);
-            output.write(RECEIPT_MAGIC);
-            output.writeLong(input.target().worldSeed());
-            output.writeInt(input.target().chunkX());
-            output.writeInt(input.target().chunkZ());
-            output.writeInt(Blocks.MIN_Y);
-            output.writeInt(Blocks.CHUNK_Y);
-            output.writeByte(Mc263FeaturesRegion.INPUT_RADIUS);
-            output.writeByte(Mc263FeaturesRegion.INPUT_CHUNK_COUNT);
-            for (ChunkInput chunk : input.chunks()) output.write(chunk.receiptFragment());
-            output.flush();
-            return bytes.toByteArray();
-        } catch (IOException impossible) {
-            throw new IllegalStateException("in-memory post-CARVERS region receipt failed",
-                    impossible);
+        byte[] cached = input.receipt;
+        if (cached != null) return cached;
+        List<byte[]> fragments = new ArrayList<>(input.chunks().size());
+        int length = RECEIPT_MAGIC.length + Long.BYTES + Integer.BYTES * 4 + 2;
+        for (ChunkInput chunk : input.chunks()) {
+            byte[] fragment = chunk.receiptFragment();
+            fragments.add(fragment);
+            length = Math.addExact(length, fragment.length);
         }
+        java.nio.ByteBuffer output = java.nio.ByteBuffer.allocate(length);
+        output.put(RECEIPT_MAGIC);
+        output.putLong(input.target().worldSeed());
+        output.putInt(input.target().chunkX());
+        output.putInt(input.target().chunkZ());
+        output.putInt(Blocks.MIN_Y);
+        output.putInt(Blocks.CHUNK_Y);
+        output.put((byte) Mc263FeaturesRegion.INPUT_RADIUS);
+        output.put((byte) Mc263FeaturesRegion.INPUT_CHUNK_COUNT);
+        for (byte[] fragment : fragments) output.put(fragment);
+        if (output.hasRemaining()) throw new IllegalStateException("post-CARVERS receipt length drift");
+        cached = output.array();
+        input.receipt = cached;
+        return cached;
     }
 
     private static Mc263FeaturesRegion.CarversChunk toCarversChunk(ChunkInput input) {
@@ -229,6 +242,9 @@ public final class Mc263PostCarversFeaturesRegionBuilder {
 
         public TargetMetadata target() { return target; }
         public List<ChunkInput> chunks() { return chunks; }
+
+        /** Memoized {@link #receiptView}; the input is immutable, so a racing rebuild is identical. */
+        private volatile byte[] receipt;
     }
 
     public static final class ChunkInput {

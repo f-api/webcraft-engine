@@ -23,6 +23,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Arrays;
 import java.util.HexFormat;
 import java.util.Objects;
 
@@ -55,6 +56,8 @@ public final class ChunkGenerator {
     private final McDensityFunction density;
     private final McDensityFunction noodleDensity;
     private final McDensityFunction.Context densityContext;
+    /** Returned to this thread's pool by {@link #finish}; a generator is not used after that. */
+    private final DensityEvaluationCache evaluationCache;
     private final Mc263Beardifier beardifier;
     private final McAquifer.Inputs aquiferInputs;
     private McAquifer aquifer;
@@ -97,8 +100,7 @@ public final class ChunkGenerator {
         this.beardifier = beardifier;
         this.density=resources.graph.mainLatticeInput();
         this.noodleDensity=resources.graph.noodle();
-        DensityEvaluationCache evaluationCache =
-                new DensityEvaluationCache(resources.graph.cacheSlotCount());
+        this.evaluationCache = DensityEvaluationCache.acquire(resources.graph.cacheSlotCount());
         this.densityContext=new McDensityFunction.Context(0,0,0,evaluationCache);
         this.densityColumnCache=resources.columns;
         this.evidenceContext=evidenceContext;
@@ -335,7 +337,11 @@ public final class ChunkGenerator {
         checkCancellation(context);
         ChunkGenerator generator=new ChunkGenerator(seed, null,
                 context.densityResources(seed), context);
-        return generator.generatePostCarversEvidence(cx, cz);
+        try {
+            return generator.generatePostCarversEvidence(cx, cz);
+        } finally {
+            generator.finish();
+        }
     }
 
     /**
@@ -345,7 +351,11 @@ public final class ChunkGenerator {
     static PostCarversChunkData generatePostCarversChunkData(int seed, int cx, int cz) {
         requireRepresentableChunk(cx, cz);
         ChunkGenerator generator = new ChunkGenerator(seed);
-        return generator.generatePostCarversChunkData(cx, cz);
+        try {
+            return generator.generatePostCarversChunkData(cx, cz);
+        } finally {
+            generator.finish();
+        }
     }
 
     /** Package boundary for a post-CARVERS cut with worker-local evidence resources. */
@@ -356,7 +366,11 @@ public final class ChunkGenerator {
         checkCancellation(context);
         ChunkGenerator generator = new ChunkGenerator(seed, null,
                 context.densityResources(seed), context);
-        return generator.generatePostCarversChunkData(cx, cz);
+        try {
+            return generator.generatePostCarversChunkData(cx, cz);
+        } finally {
+            generator.finish();
+        }
     }
 
     /**
@@ -368,7 +382,11 @@ public final class ChunkGenerator {
         requireRepresentableChunk(cx, cz);
         ChunkGenerator generator = new ChunkGenerator(seed,
                 Objects.requireNonNull(beardifier, "canonical Beardifier"));
-        return generator.generatePostCarversChunkData(cx, cz);
+        try {
+            return generator.generatePostCarversChunkData(cx, cz);
+        } finally {
+            generator.finish();
+        }
     }
 
     /** Package boundary for a Beardifier-backed cut with worker-local evidence resources. */
@@ -381,7 +399,11 @@ public final class ChunkGenerator {
         ChunkGenerator generator = new ChunkGenerator(seed,
                 Objects.requireNonNull(beardifier, "canonical Beardifier"),
                 context.densityResources(seed), context);
-        return generator.generatePostCarversChunkData(cx, cz);
+        try {
+            return generator.generatePostCarversChunkData(cx, cz);
+        } finally {
+            generator.finish();
+        }
     }
 
     public static final class GeneratedChunk {
@@ -557,7 +579,11 @@ public final class ChunkGenerator {
     /** SHA-256 counterpart of every canonical NOISE-to-CARVERS checkpoint. */
     public static String[] generatePostCarversStageSha256(int seed, int cx, int cz) {
         ChunkGenerator generator = new ChunkGenerator(seed);
-        return generator.generatePostCarversEvidence(cx, cz).stageSha256();
+        try {
+            return generator.generatePostCarversEvidence(cx, cz).stageSha256();
+        } finally {
+            generator.finish();
+        }
     }
 
     private PostCarversEvidence generatePostCarversEvidence(int cx, int cz) {
@@ -643,9 +669,19 @@ public final class ChunkGenerator {
         if(stageIndex==CANONICAL_STAGE_NAMES.length-1){StringBuilder line=new StringBuilder("TERRAIN_PROFILE chunk=").append(cx).append(',').append(cz);
             for(int i=0;i<CANONICAL_STAGE_NAMES.length;i++)line.append(' ').append(CANONICAL_STAGE_NAMES[i]).append("Ms=").append(profileStageNanos[i]/1_000_000.0);System.err.println(line);}}
 
+    /** Ends a generator that lived for one static call and hands its evaluation cache back. */
+    private void finish() {
+        DensityEvaluationCache.release(evaluationCache);
+    }
+
     /** 계약 §4 스폰 좌표 계산용 표면 높이 조회(청크 생성과 같은 높이 함수 사용). */
     public static int surfaceHeight(int seed, int worldX, int worldZ) {
-        return new ChunkGenerator(seed).densitySurfaceHeight(worldX, worldZ);
+        ChunkGenerator generator = new ChunkGenerator(seed);
+        try {
+            return generator.densitySurfaceHeight(worldX, worldZ);
+        } finally {
+            generator.finish();
+        }
     }
 
     // ── 시드 파생 계산(TS Ctx 대응) ─────────────────────────
@@ -1091,17 +1127,43 @@ public final class ChunkGenerator {
          */
         private final int[] entries;
         private final double[] values;
+        private final int slotCount;
+        /**
+         * Presence word of a live entry. A cache is reused by the next generator on the same thread
+         * (the arrays are over 512KB, so a fresh pair per chunk was a humongous G1 allocation each
+         * time); bumping the stamp empties it exactly as a new cache would.
+         */
+        private int stamp = 1;
+
+        /** One idle cache per thread; a nested or unreleased generator simply allocates its own. */
+        private static final ThreadLocal<DensityEvaluationCache> IDLE = new ThreadLocal<>();
 
         DensityEvaluationCache(int slotCount) {
+            this.slotCount = slotCount;
             int length = Math.max(1, slotCount * ENTRIES_PER_SLOT);
             entries = new int[Math.multiplyExact(length, ENTRY_STRIDE)];
             values = new double[length];
         }
 
+        static DensityEvaluationCache acquire(int slotCount) {
+            DensityEvaluationCache idle = IDLE.get();
+            if (idle == null || idle.slotCount != slotCount) return new DensityEvaluationCache(slotCount);
+            IDLE.remove();
+            if (++idle.stamp == 0) {
+                Arrays.fill(idle.entries, 0);
+                idle.stamp = 1;
+            }
+            return idle;
+        }
+
+        static void release(DensityEvaluationCache cache) {
+            IDLE.set(cache);
+        }
+
         @Override public double get(int slot, int x, int y, int z) {
             int index = index(slot, x, y, z);
             int key = index * ENTRY_STRIDE;
-            if (entries[key + 3] == 0 || entries[key] != x || entries[key + 1] != y
+            if (entries[key + 3] != stamp || entries[key] != x || entries[key + 1] != y
                     || entries[key + 2] != z) {
                 return Double.NaN;
             }
@@ -1114,7 +1176,7 @@ public final class ChunkGenerator {
             entries[key] = x;
             entries[key + 1] = y;
             entries[key + 2] = z;
-            entries[key + 3] = 1;
+            entries[key + 3] = stamp;
             values[index] = value;
         }
 

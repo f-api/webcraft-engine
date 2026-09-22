@@ -143,6 +143,14 @@ public final class Mc263StructureWorldAccess implements Mc263StructureSetStartPl
     }
 
     /**
+     * Ends one start-chunk decision. The next decision clears the biome cache anyway, so a table that
+     * one wide decision grew is released now instead of staying in the long-lived generation context.
+     */
+    void endStructureChunkDecision() {
+        biomeCache.releaseIfLarge();
+    }
+
+    /**
      * Mirrors the biome-sampler part of {@code ServerLevel#getChunk}: a full chunk has every
      * section populated through {@code ChunkAccess#fillBiomesFromNoise} before its callers keep
      * using the same level.  The section loop is ascending and each section visits quart
@@ -398,6 +406,10 @@ public final class Mc263StructureWorldAccess implements Mc263StructureSetStartPl
             if (keys.length > 1 << 16) allocate(1 << 12);
             else java.util.Arrays.fill(values, ABSENT);
             size = 0;
+        }
+
+        void releaseIfLarge() {
+            if (keys.length > 1 << 16) clear();
         }
 
         private void insert(long key, int value) {

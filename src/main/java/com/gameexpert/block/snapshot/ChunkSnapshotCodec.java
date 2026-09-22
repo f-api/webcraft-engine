@@ -242,15 +242,20 @@ public final class ChunkSnapshotCodec {
                     int blockType = Short.toUnsignedInt(types[cell]);
                     int value = (blockType << 8) | Byte.toUnsignedInt(states[cell]);
                     if (value >= BLOCK_STATE_ID_CAPACITY) validateBlockType(blockType);
+                    int slot = (value * 0x9E3779B9) >>> (32 - EncoderScratch.SLOT_BITS);
+                    while (scratch.stamps[slot] == stamp && scratch.keys[slot] != value) {
+                        slot = (slot + 1) & (EncoderScratch.SLOTS - 1);
+                    }
                     int paletteIndex;
-                    if (scratch.stamps[value] != stamp) {
+                    if (scratch.stamps[slot] != stamp) {
                         validateBlockType(blockType);
                         paletteIndex = paletteSize;
-                        scratch.stamps[value] = stamp;
-                        scratch.reverse[value] = paletteIndex;
+                        scratch.stamps[slot] = stamp;
+                        scratch.keys[slot] = value;
+                        scratch.reverse[slot] = paletteIndex;
                         scratch.palette[paletteSize++] = value;
                     } else {
-                        paletteIndex = scratch.reverse[value];
+                        paletteIndex = scratch.reverse[slot];
                     }
                     scratch.indexes[cursor++] = paletteIndex;
                 }
@@ -648,12 +653,17 @@ public final class ChunkSnapshotCodec {
     }
 
     /**
-     * 인코더 호출 스레드가 재사용하는 primitive scratch입니다. stamp가 같은 section에서만 reverse 값이
-     * 유효하므로 매 청크마다 131,072칸을 지울 필요가 없고, palette 배열 순서는 첫 등장 순서 그대로입니다.
+     * 인코더 호출 스레드가 재사용하는 primitive scratch입니다. stamp가 같은 section에서만 slot이
+     * 유효하므로 매 section마다 표를 지울 필요가 없고, palette 배열 순서는 첫 등장 순서 그대로입니다.
+     * 한 section의 서로 다른 값은 최대 4,096개이므로 8,192칸 open-addressing 표로 충분합니다
+     * (block-state 조합 공간 전체를 직접 색인하면 스레드마다 8MB가 듭니다).
      */
     private static final class EncoderScratch {
-        private final int[] reverse = new int[BLOCK_STATE_ID_CAPACITY];
-        private final int[] stamps = new int[BLOCK_STATE_ID_CAPACITY];
+        private static final int SLOT_BITS = 13;
+        private static final int SLOTS = 1 << SLOT_BITS;
+        private final int[] keys = new int[SLOTS];
+        private final int[] reverse = new int[SLOTS];
+        private final int[] stamps = new int[SLOTS];
         private final int[] palette = new int[SECTION_CELLS];
         private final int[] indexes = new int[SECTION_CELLS];
         private int stamp;

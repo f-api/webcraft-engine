@@ -915,7 +915,8 @@ public final class Mc263CanonicalFeaturesProducerSkeleton {
         private final ProductionContextAuthority productionContextAuthority;
         private final List<SourceInput> sources;
         private final Map<Long, SourceInput> sourceByChunk;
-        private final byte[] provenanceReceipt;
+        /** Built on first use: production itself only needs the successor receipt. */
+        private volatile byte[] provenanceReceipt;
 
         private UpstreamProduct(Mc263PostCarversFeaturesRegionBuilder.RegionInput regionInput,
                 Mc263StructureCarrier carrier,
@@ -951,8 +952,6 @@ public final class Mc263CanonicalFeaturesProducerSkeleton {
             }
             sources = List.copyOf(ordered);
             sourceByChunk = Map.copyOf(indexed);
-            provenanceReceipt = provenance(regionInput, carrier, worldGenRegionRandomState,
-                    worldGenRegionRandomState, productionContextAuthority.receipt());
         }
 
         public static UpstreamProduct bind(
@@ -982,7 +981,15 @@ public final class Mc263CanonicalFeaturesProducerSkeleton {
             return productionContextAuthority;
         }
         List<SourceInput> sources() { return sources; }
-        byte[] provenanceReceipt() { return provenanceReceipt.clone(); }
+        byte[] provenanceReceipt() {
+            byte[] receipt = provenanceReceipt;
+            if (receipt == null) {
+                receipt = provenance(regionInput, carrier, worldGenRegionRandomState,
+                        worldGenRegionRandomState, productionContextAuthority.receipt());
+                provenanceReceipt = receipt;
+            }
+            return receipt.clone();
+        }
         byte[] provenanceReceipt(Mc263StructureCarrier successorCarrier,
                 Mc263WorldGenRegionRandom.State successorState) {
             Mc263StructureCarrier canonicalSuccessor = Objects.requireNonNull(
@@ -1026,37 +1033,30 @@ public final class Mc263CanonicalFeaturesProducerSkeleton {
             Mc263WorldGenRegionRandom.State randomPredecessor,
             Mc263WorldGenRegionRandom.State randomSuccessor,
             byte[] productionContextAuthorityReceipt) {
-        byte[] postCarvers = Mc263PostCarversFeaturesRegionBuilder.receipt(regionInput);
+        byte[] postCarvers = Mc263PostCarversFeaturesRegionBuilder.receiptView(regionInput);
         byte[] structures = carrier.receiptBytes();
         byte[] predecessorReceipt = randomPredecessor.receipt();
         byte[] successorReceipt = randomSuccessor.receipt();
-        try {
-            ByteArrayOutputStream sourceBytes = new ByteArrayOutputStream(postCarvers.length
-                    + PRODUCTION_CONTEXT_PROVENANCE_MAGIC.length + Integer.BYTES
-                    + productionContextAuthorityReceipt.length
-                    + WORLDGEN_RANDOM_PROVENANCE_MAGIC.length + Integer.BYTES * 2
-                    + predecessorReceipt.length + successorReceipt.length);
-            DataOutputStream source = new DataOutputStream(sourceBytes);
-            source.write(postCarvers);
-            source.write(PRODUCTION_CONTEXT_PROVENANCE_MAGIC);
-            source.writeInt(productionContextAuthorityReceipt.length);
-            source.write(productionContextAuthorityReceipt);
-            source.write(WORLDGEN_RANDOM_PROVENANCE_MAGIC);
-            source.writeInt(predecessorReceipt.length); source.write(predecessorReceipt);
-            source.writeInt(successorReceipt.length); source.write(successorReceipt);
-            source.flush();
-            byte[] sourceReceipt = sourceBytes.toByteArray();
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream(
-                    PROVENANCE_MAGIC.length + 8 + sourceReceipt.length + structures.length);
-            DataOutputStream output = new DataOutputStream(bytes);
-            output.write(PROVENANCE_MAGIC);
-            output.writeInt(sourceReceipt.length); output.write(sourceReceipt);
-            output.writeInt(structures.length); output.write(structures);
-            output.flush();
-            return bytes.toByteArray();
-        } catch (IOException impossible) {
-            throw new IllegalStateException("in-memory canonical provenance failed", impossible);
-        }
+        // Same bytes as the former nested stream build, written once into an exact-size array.
+        int sourceLength = Math.addExact(Math.addExact(postCarvers.length,
+                PRODUCTION_CONTEXT_PROVENANCE_MAGIC.length + Integer.BYTES
+                        + productionContextAuthorityReceipt.length
+                        + WORLDGEN_RANDOM_PROVENANCE_MAGIC.length + Integer.BYTES * 2),
+                predecessorReceipt.length + successorReceipt.length);
+        java.nio.ByteBuffer output = java.nio.ByteBuffer.allocate(Math.addExact(
+                PROVENANCE_MAGIC.length + Integer.BYTES * 2 + sourceLength, structures.length));
+        output.put(PROVENANCE_MAGIC);
+        output.putInt(sourceLength);
+        output.put(postCarvers);
+        output.put(PRODUCTION_CONTEXT_PROVENANCE_MAGIC);
+        output.putInt(productionContextAuthorityReceipt.length);
+        output.put(productionContextAuthorityReceipt);
+        output.put(WORLDGEN_RANDOM_PROVENANCE_MAGIC);
+        output.putInt(predecessorReceipt.length); output.put(predecessorReceipt);
+        output.putInt(successorReceipt.length); output.put(successorReceipt);
+        output.putInt(structures.length); output.put(structures);
+        if (output.hasRemaining()) throw new IllegalStateException("canonical provenance length drift");
+        return output.array();
     }
 
     private static byte[] upstreamProductBinding(
@@ -1064,18 +1064,19 @@ public final class Mc263CanonicalFeaturesProducerSkeleton {
             Mc263StructureCarrier carrier,
             Mc263WorldGenRegionRandom.State worldGenRegionRandomState) {
         try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            DataOutputStream out = new DataOutputStream(bytes);
+            // Hashes the same stream the former byte-array build produced, without materializing it.
+            java.security.MessageDigest digest = java.security.MessageDigest.getInstance("SHA-256");
+            DataOutputStream out = new DataOutputStream(new java.security.DigestOutputStream(
+                    java.io.OutputStream.nullOutputStream(), digest));
             out.write("PCA263-UPSTREAM-V1\0".getBytes(StandardCharsets.US_ASCII));
-            byte[] postCarvers = Mc263PostCarversFeaturesRegionBuilder.receipt(regionInput);
+            byte[] postCarvers = Mc263PostCarversFeaturesRegionBuilder.receiptView(regionInput);
             byte[] structures = carrier.receiptBytes();
             byte[] random = worldGenRegionRandomState.receipt();
             out.writeInt(postCarvers.length); out.write(postCarvers);
             out.writeInt(structures.length); out.write(structures);
             out.writeInt(random.length); out.write(random);
             out.flush();
-            return java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(bytes.toByteArray());
+            return digest.digest();
         } catch (IOException | java.security.NoSuchAlgorithmException impossible) {
             throw new IllegalStateException("production context product binding failed",
                     impossible);

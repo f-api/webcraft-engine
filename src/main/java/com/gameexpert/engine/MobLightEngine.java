@@ -785,7 +785,9 @@ final class MobLightEngine {
         private final int[] values;
         private final int[] stamps;
         private final long[] dependencyRevisions;
-        private final TerrainAccessor.SnapshotSource[] sources;
+        // Source identity as its serial, not a reference: a memo entry must not keep an evicted chunk's
+        // snapshot (and its 196KB block array) reachable until the memo happens to be cleared.
+        private final long[] sources;
         private final int[] occupiedSlots;
         private int generation = 1;
         private int size;
@@ -799,7 +801,7 @@ final class MobLightEngine {
             values = new int[capacity];
             stamps = new int[capacity];
             dependencyRevisions = new long[capacity];
-            sources = new TerrainAccessor.SnapshotSource[capacity];
+            sources = new long[capacity];
             occupiedSlots = new int[capacity];
         }
 
@@ -809,7 +811,7 @@ final class MobLightEngine {
             while (stamps[slot] == generation) {
                 if (xs[slot] == x && ys[slot] == y && zs[slot] == z
                         && modes[slot] == mode) {
-                    return sources[slot] == source
+                    return sources[slot] == source.serial()
                             && dependencyRevisions[slot] == dependencyRevision
                             ? values[slot] : MISS;
                 }
@@ -826,7 +828,7 @@ final class MobLightEngine {
             while (stamps[slot] == generation) {
                 if (xs[slot] == x && ys[slot] == y && zs[slot] == z
                         && modes[slot] == mode) {
-                    sources[slot] = source;
+                    sources[slot] = source.serial();
                     dependencyRevisions[slot] = dependencyRevision;
                     values[slot] = value;
                     return;
@@ -839,7 +841,7 @@ final class MobLightEngine {
             ys[slot] = y;
             zs[slot] = z;
             modes[slot] = mode;
-            sources[slot] = source;
+            sources[slot] = source.serial();
             dependencyRevisions[slot] = dependencyRevision;
             values[slot] = value;
             size++;
@@ -851,7 +853,7 @@ final class MobLightEngine {
                 generation = 1;
             }
             for (int index = 0; index < size; index++) {
-                sources[occupiedSlots[index]] = null;
+                sources[occupiedSlots[index]] = 0L;
             }
             clearedSlots += size;
             size = 0;

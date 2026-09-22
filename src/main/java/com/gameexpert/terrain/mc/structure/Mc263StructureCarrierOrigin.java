@@ -274,8 +274,12 @@ public final class Mc263StructureCarrierOrigin {
                 ChunkStarts starts = memo == null ? null : memo.cached(worldSeed, chunkX, chunkZ);
                 if (starts == null) {
                     world.beginStructureChunkDecision();
-                    starts = decideChunk(coordinator, worldSeed, chunkX, chunkZ, state, world,
-                            authority);
+                    try {
+                        starts = decideChunk(coordinator, worldSeed, chunkX, chunkZ, state, world,
+                                authority);
+                    } finally {
+                        world.endStructureChunkDecision();
+                    }
                     if (memo != null) memo.store(worldSeed, starts, authority);
                 }
                 try {

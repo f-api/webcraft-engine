@@ -429,6 +429,10 @@ public final class TerrainAccessor {
      * sparse override map is frozen at handoff, so a sender can scan it without touching owner state.
      */
     public static final class SnapshotSource {
+        private static final java.util.concurrent.atomic.AtomicLong SERIALS =
+                new java.util.concurrent.atomic.AtomicLong();
+        /** Unique per instance (never 0), for caches that must compare identity without retaining it. */
+        private final long serial = SERIALS.incrementAndGet();
         private final int chunkX;
         private final int chunkZ;
         private final short[] generatedBlocks;
@@ -479,6 +483,10 @@ public final class TerrainAccessor {
                 overrideStates[slot] = (byte) entry.getValue().blockState;
             }
             this.terrainSurfaceHeights = terrainSurfaceHeights;
+        }
+
+        public long serial() {
+            return serial;
         }
 
         public int chunkX() {
