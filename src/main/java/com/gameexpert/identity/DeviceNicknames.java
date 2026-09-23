@@ -7,8 +7,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Component;
-import org.springframework.transaction.annotation.Propagation;
-import org.springframework.transaction.annotation.Transactional;
 
 import lombok.RequiredArgsConstructor;
 
@@ -29,10 +27,10 @@ public class DeviceNicknames {
     private static final int MAX_ATTEMPTS = 12;
 
     private final DeviceNicknameRepository repository;
+    private final DeviceNicknameWriter writer;
     private final ConcurrentHashMap<String, String> cache = new ConcurrentHashMap<>();
 
     /** 이 기기가 이 이름으로 접속할 때 실제로 쓸 닉네임입니다. */
-    @Transactional(propagation = Propagation.REQUIRES_NEW)
     public String storedFor(String deviceHash, String displayNickname) {
         String key = deviceHash + '\u0000' + displayNickname;
         String cached = cache.get(key);
@@ -60,7 +58,8 @@ public class DeviceNicknames {
                     ? displayNickname
                     : tagged(displayNickname, deviceHash, attempt);
             try {
-                repository.saveAndFlush(new DeviceNickname(deviceHash, displayNickname, candidate));
+                // 시도 한 번이 트랜잭션 하나다. 실패한 트랜잭션을 이어 쓰면 영속성 컨텍스트가 깨진다.
+                writer.insert(deviceHash, displayNickname, candidate);
                 return candidate;
             } catch (DataIntegrityViolationException collision) {
                 // 같은 이름을 동시에 집었거나 꼬리표가 겹쳤다. 다음 후보로 넘어간다.
