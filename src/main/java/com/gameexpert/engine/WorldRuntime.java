@@ -188,8 +188,13 @@ public final class WorldRuntime {
      *
      * <p>16ms 도 실측했는데 재접속 6.81초·콜드 28.0초로 8ms(6.82초·27.8초)와 같았다. 더 준다고
      * 더 나아가지 않으므로, 같은 성능에서 owner 턴을 덜 잡는 8ms 로 둔다.</p>
+     *
+     * <p>다만 이 수치는 빠른 개발 장비에서 잰 것이다. 코어가 느린 서버에서는 8ms 안에 들어가는
+     * 활성화 수가 적어 진입이 길어지므로, {@code -Dwebcraft.activationDrainBudgetMs} 로 올릴 수
+     * 있게 열어 둔다. 올리면 틱당 owner 턴을 더 잡으므로 틱 예산 초과와 함께 봐야 한다.</p>
      */
-    private static final long ACTIVATION_DRAIN_BUDGET_NANOS = 8_000_000L;
+    private static final long ACTIVATION_DRAIN_BUDGET_NANOS =
+            Math.max(1L, Long.getLong("webcraft.activationDrainBudgetMs", 8L)) * 1_000_000L;
     /** The tick only applies this many already-planned activation cells at most. */
     private static final int ACTIVATION_APPLICATIONS_PER_TICK = 64;
     /** One owner-side activation slice batches cheap committed cells while the outer 2 ms deadline remains hard. */
