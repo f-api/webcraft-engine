@@ -1,1 +1,2 @@
-org.springframework.boot.EnvironmentPostProcessor=com.gameexpert.bootstrap.WebcraftDefaults
+org.springframework.boot.EnvironmentPostProcessor=com.gameexpert.bootstrap.WebcraftDefaults,\
+com.gameexpert.bootstrap.HeapAutoTune
