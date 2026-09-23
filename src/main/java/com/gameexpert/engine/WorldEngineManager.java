@@ -131,22 +131,6 @@ public class WorldEngineManager
         dimensionGateway = java.util.Objects.requireNonNull(gateway);
     }
 
-    /**
-     * 접속 전에 이 월드의 스폰 주변을 올려 둔다. 실패해도 첫 진입이 느려질 뿐이라 호출부가 삼킨다.
-     *
-     * @param radius 스폰 청크 기준 반경(청크 수). 4면 9×9로 첫 화면이 요구하는 창과 같다.
-     */
-    public void warmSpawnArea(long worldId, int seed, Difficulty difficulty, int radius) {
-        int[] spawn = worldSpawn(worldId, seed);
-        WorldRuntime runtime = acquireDimensionTarget(worldId, seed, difficulty);
-        try {
-            runtime.warmSpawnArea(Math.floorDiv(spawn[0], Blocks.CHUNK_X),
-                    Math.floorDiv(spawn[2], Blocks.CHUNK_Z), Math.max(0, radius));
-        } finally {
-            runtime.releaseDimensionArrival();
-        }
-    }
-
     public void prepareDimensionTarget(long worldId, int seed, Difficulty difficulty, double[] pose) {
         WorldRuntime runtime = acquireDimensionTarget(worldId, seed, difficulty);
         try { runtime.prepareDimensionArrival(pose); }

@@ -3,14 +3,9 @@ package com.gameexpert.engine;
 import java.util.List;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import org.springframework.context.event.EventListener;
-import org.springframework.core.env.Environment;
 import org.springframework.stereotype.Component;
-
-import com.gameexpert.api.persistence.WorldAccess;
-import com.gameexpert.api.persistence.WorldStore;
 
 /**
  * Loads the engine's large static tables once the server is up, on its own thread.
@@ -19,10 +14,6 @@ import com.gameexpert.api.persistence.WorldStore;
  * and when that cell is read inside a world tick the whole tick waits: a profile of ticks that overran their
  * budget showed a feature block-state table being built in the middle of one. Loading them before anyone joins
  * moves that work off the tick.</p>
- *
- * <p>{@code webcraft.warmWorldsOnStartup=true} 를 주면 이미 있는 월드의 스폰 주변도 미리 만들어
- * 둔다. 첫 진입 위치는 누가 들어오든 같으므로, 아무도 접속하지 않은 동안 만들어 두면 첫 사람이
- * 그 대기를 겪지 않는다. 월드가 여러 개면 모두 데우므로, 고정 월드 하나로 운영할 때 쓴다.</p>
  */
 @Component
 public class EngineWarmup {
@@ -43,52 +34,9 @@ public class EngineWarmup {
             "com.gameexpert.engine.redstone.RedstoneShapes",
             "com.gameexpert.block.snapshot.ChunkSnapshotCodec");
 
-    private final ObjectProvider<WorldStore> worlds;
-    private final ObjectProvider<WorldEngineManager> engines;
-    private final boolean warmWorlds;
-    private final int radius;
-
-    public EngineWarmup(ObjectProvider<WorldStore> worlds, ObjectProvider<WorldEngineManager> engines,
-            Environment environment) {
-        this.worlds = worlds;
-        this.engines = engines;
-        this.warmWorlds = environment.getProperty("webcraft.warmWorldsOnStartup", Boolean.class, false);
-        this.radius = Math.max(0, environment.getProperty("webcraft.warmWorldRadius", Integer.class, 4));
-    }
-
     @EventListener(ApplicationReadyEvent.class)
     public void warmOnStartup() {
-        Thread.ofVirtual().name("engine-table-warmup").start(() -> {
-            loadTables();
-            if (warmWorlds) warmExistingWorldSpawns();
-        });
-    }
-
-    /**
-     * 이미 있는 월드의 스폰 주변 생산을 미리 시작한다. 실패는 머리 시작을 잃는 것뿐이라 기록만 한다.
-     */
-    private void warmExistingWorldSpawns() {
-        WorldStore store = worlds.getIfAvailable();
-        WorldEngineManager manager = engines.getIfAvailable();
-        if (store == null || manager == null) {
-            return;
-        }
-        long started = System.nanoTime();
-        int warmed = 0;
-        try {
-            for (WorldAccess world : store.findRootWorlds()) {
-                try {
-                    manager.warmSpawnArea(world.getId(), (int) world.getSeed(), world.getDifficulty(), radius);
-                    warmed++;
-                } catch (RuntimeException failure) {
-                    log.debug("World spawn warm-up skipped world={}", world.getId(), failure);
-                }
-            }
-        } catch (RuntimeException failure) {
-            log.debug("World spawn warm-up skipped", failure);
-            return;
-        }
-        log.info("월드 스폰 프리워밍 시작: {}개 ({}ms)", warmed, (System.nanoTime() - started) / 1_000_000L);
+        Thread.ofVirtual().name("engine-table-warmup").start(EngineWarmup::loadTables);
     }
 
     /** Initializes every table; a failure here is only a lost head start, so it is logged and skipped. */

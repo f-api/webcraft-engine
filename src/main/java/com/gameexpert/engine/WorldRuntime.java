@@ -865,28 +865,6 @@ public final class WorldRuntime {
         });
     }
 
-    /**
-     * 아무도 접속하지 않은 동안 스폰 주변 청크를 미리 준비해 둔다.
-     *
-     * <p>첫 진입이 오래 걸리는 이유는 저장된 청크를 처음 읽어 올리는 비용이다(같은 월드에 두
-     * 번째로 들어가면 실측 80초 → 14초). 여기서 미리 읽어 두면 첫 사람이 그 값을 치르지 않는다.
-     * 한 청크씩 owner 턴에 넘기므로, 접속자가 있어도 틱을 길게 잡지 않는다.</p>
-     */
-    void warmSpawnArea(int centerChunkX, int centerChunkZ, int radius) {
-        for (int distance = 0; distance <= radius; distance++) {
-            for (int dx = -distance; dx <= distance; dx++) {
-                for (int dz = -distance; dz <= distance; dz++) {
-                    if (Math.max(Math.abs(dx), Math.abs(dz)) != distance) continue;
-                    var prepared = prepareChunkOffTick(centerChunkX + dx, centerChunkZ + dz);
-                    dimensionOwner(() -> {
-                        accessor.adoptPreparedChunkForSnapshot(prepared);
-                        return null;
-                    });
-                }
-            }
-        }
-    }
-
     void prepareDimensionArrival(double[] pose) {
         int x = (int) Math.floor(pose[0]), z = (int) Math.floor(pose[2]);
         List<TerrainAccessor.PreparedChunk> chunks = new ArrayList<>();

@@ -158,8 +158,7 @@ class HeartbeatTransportLockRegressionTest {
                     System.nanoTime() - TimeUnit.SECONDS.toNanos(91));
             when(registry.get(1L, "Audit")).thenReturn(new SessionRegistry.Entry(session));
             when(limiter.check(session)).thenReturn(InboundRateLimiter.Decision.ACCEPT);
-            game = new GameConnectionRuntime(registry, new com.gameexpert.capacity.PlayerCapacity(
-                    new org.springframework.mock.env.MockEnvironment()), null, null, null, null, limiter);
+            game = new GameConnectionRuntime(registry, null, null, null, null, limiter);
         }
     }
 }
