@@ -385,6 +385,30 @@ class FinalCarrierTickSchedulerTest {
     }
 
     @Test
+    void evictingOneChunkLeavesOtherChunksPending() {
+        MemoryBoundary durable = new MemoryBoundary();
+        FinalCarrierTickScheduler scheduler = scheduler(durable);
+        List<BlockTick> here = List.of(block(0, Blocks.AIR, "minecraft:cave_air", 0, TickPriority.NORMAL, 0));
+        List<BlockTick> there = List.of(block(0, Blocks.AIR, "minecraft:cave_air", 0, TickPriority.NORMAL, 0));
+        scheduler.admitBlockLane(blockReceipt(11L, 0, 0, here), 0, true, here);
+        scheduler.admitBlockLane(blockReceipt(12L, 3, -2, there), 0, true, there);
+        assertThat(scheduler.pendingTicks()).hasSize(2);
+
+        scheduler.evictChunk(1, 1);
+        assertThat(scheduler.pendingTicks()).hasSize(2);
+
+        scheduler.evictChunk(0, 0);
+        assertThat(scheduler.pendingTicks()).hasSize(1);
+        assertThat(scheduler.pendingTicks()).allSatisfy(tick -> {
+            assertThat(Math.floorDiv(tick.x(), Blocks.CHUNK_X)).isEqualTo(3);
+            assertThat(Math.floorDiv(tick.z(), Blocks.CHUNK_Z)).isEqualTo(-2);
+        });
+
+        scheduler.evictChunk(3, -2);
+        assertThat(scheduler.pendingTicks()).isEmpty();
+    }
+
+    @Test
     void evictionAndReactivationPreserveAbsoluteDue() {
         MemoryBoundary durable = new MemoryBoundary();
         FinalCarrierTickScheduler scheduler = scheduler(durable);

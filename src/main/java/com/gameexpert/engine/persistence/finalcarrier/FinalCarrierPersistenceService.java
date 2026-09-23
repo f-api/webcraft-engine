@@ -3731,7 +3731,8 @@ public class FinalCarrierPersistenceService
     }
 
     private static String sourceFingerprint(NeutralFinalChunk source) {
-        return sha256(source.withSidecars(NeutralFinalChunk.Sidecars.EMPTY).encodedCarrier());
+        // Same digest, answered once per carrier instead of re-encoding it through the producer each time.
+        return source.sourceFingerprintSha256();
     }
 
     private static void requireExactProjection(CanonicalWorldgenStore.Lane lane,

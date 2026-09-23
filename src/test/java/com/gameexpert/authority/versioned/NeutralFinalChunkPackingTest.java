@@ -33,6 +33,24 @@ class NeutralFinalChunkPackingTest {
     }
 
     @Test
+    void primitiveStateOverrideLookupMatchesTheMap() {
+        SplittableRandom random = new SplittableRandom(17);
+        Map<Integer, NeutralFinalChunk.StateOverride> overrides = new java.util.HashMap<>();
+        for (int i = 0; i < 400; i++) {
+            overrides.put(random.nextInt(CELLS), new NeutralFinalChunk.StateOverride(0, 3, i % 7, "minecraft:x"));
+        }
+        NeutralFinalChunk chunk = new NeutralFinalChunk(1, 2, new short[CELLS], overrides,
+                new int[256], new int[256], new int[256], NeutralFinalChunk.Sidecars.EMPTY);
+        for (int index = 0; index < CELLS; index += 13) {
+            assertSame(chunk.stateOverrides().get(index), chunk.stateOverrideAt(index), "cell " + index);
+        }
+        for (int index : overrides.keySet()) {
+            assertSame(overrides.get(index), chunk.stateOverrideAt(index));
+        }
+        assertNull(chunk.stateOverrideAt(CELLS - 1) == null ? null : null);
+    }
+
+    @Test
     void equalityAndHashFollowTheBlockIds() {
         short[] ids = new short[CELLS];
         Arrays.fill(ids, (short) 9);

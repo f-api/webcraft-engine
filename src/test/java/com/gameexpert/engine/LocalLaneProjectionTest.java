@@ -32,6 +32,15 @@ class LocalLaneProjectionTest {
             checked++;
         }
         assertTrue(checked >= 7);
+        // The memoized projection must keep answering what the producer answered.
+        for (TerrainAccessor.FinalLiveCarrierLane lane : TerrainAccessor.FinalLiveCarrierLane.values()) {
+            NeutralFinalChunk.Sidecars first = (NeutralFinalChunk.Sidecars) project.invoke(null, carrier, lane);
+            NeutralFinalChunk.Sidecars again = (NeutralFinalChunk.Sidecars) project.invoke(null, carrier, lane);
+            assertEquals(first, again, "repeat lane " + lane);
+            assertEquals(carrier.withSidecars(first).sidecars(), carrier.projectedSidecars(first), "memo " + lane);
+        }
+        assertEquals(carrier.sourceFingerprintSha256(), carrier.sourceFingerprintSha256());
+        assertTrue(carrier.sourceFingerprintSha256().matches("[0-9a-f]{64}"));
         assertFalse(carrier.sidecars().spawners().isEmpty(), "fixture must carry a spawner row");
     }
 }

@@ -465,7 +465,7 @@ public final class WorldRuntime {
             java.util.function.Consumer<RuntimeException> failed) {
         executeOwned(CHUNK_PREPARERS, () -> {
             try {
-                ready.accept(accessor.prepareDetachedChunkForActivation(chunkX, chunkZ));
+                ready.accept(prepareChunkOffTick(chunkX, chunkZ));
             } catch (RuntimeException failure) {
                 failed.accept(failure);
             }
@@ -852,7 +852,7 @@ public final class WorldRuntime {
         for (int[] center : centers) {
             int cx = Math.floorDiv(center[0], Blocks.CHUNK_X), cz = Math.floorDiv(center[2], Blocks.CHUNK_Z);
             for (int dx=-1; dx<=1; dx++) for (int dz=-1; dz<=1; dz++)
-                chunks.add(accessor.prepareDetachedChunkForActivation(cx+dx, cz+dz));
+                chunks.add(prepareChunkOffTick(cx+dx, cz+dz));
         }
         return dimensionOwner(() -> {
             for (var prepared : chunks) accessor.adoptPreparedChunkForSnapshot(prepared);
@@ -865,7 +865,7 @@ public final class WorldRuntime {
         List<TerrainAccessor.PreparedChunk> chunks = new ArrayList<>();
         int cx = Math.floorDiv(x, Blocks.CHUNK_X), cz = Math.floorDiv(z, Blocks.CHUNK_Z);
         for (int dx = -1; dx <= 1; dx++) for (int dz = -1; dz <= 1; dz++) {
-            chunks.add(accessor.prepareDetachedChunkForActivation(cx + dx, cz + dz));
+            chunks.add(prepareChunkOffTick(cx + dx, cz + dz));
         }
         dimensionOwner(() -> {
             for (var prepared : chunks) accessor.adoptPreparedChunkForSnapshot(prepared);
@@ -4296,14 +4296,14 @@ public final class WorldRuntime {
             // producer's subset projection is exactly `selected`. The carrier was verified when it was loaded;
             // skipping the round trip keeps a carrier inflate, encode and decode per lane off the world tick.
             if (!VERIFY_LOCAL_LANE_PROJECTION) return selected;
-            NeutralFinalChunk.Sidecars remote = carrier.withSidecars(selected).sidecars();
+            NeutralFinalChunk.Sidecars remote = carrier.projectedSidecars(selected);
             if (!remote.equals(selected)) {
                 log.error("Local {} lane projection differs from the producer for chunk {},{}",
                         lane, carrier.chunkX(), carrier.chunkZ());
             }
             return remote;
         }
-        return carrier.withSidecars(selected).sidecars();
+        return carrier.projectedSidecars(selected);
     }
 
     /** QA switch: also ask the producer and log any difference from the local lane projection. */
@@ -7474,15 +7474,32 @@ public final class WorldRuntime {
     }
 
     /** Stable producer identity excludes delivery-local lane projection and runtime override filtering. */
-    private static String finalCarrierSourceFingerprint(NeutralFinalChunk carrier) {
-        NeutralFinalChunk source = carrier.withSidecars(NeutralFinalChunk.Sidecars.EMPTY);
+    /**
+     * Prepares one chunk off the world tick and, while still off it, asks the producer for the identity and
+     * lane projections the owner's activation pass would otherwise request inside a tick.
+     */
+    private TerrainAccessor.PreparedChunk prepareChunkOffTick(int chunkX, int chunkZ) {
+        TerrainAccessor.PreparedChunk prepared = accessor.prepareDetachedChunkForActivation(chunkX, chunkZ);
+        warmFinalCarrierProjections(prepared.finalLiveCarrier());
+        return prepared;
+    }
+
+    /** Warms the per-carrier producer answers; a failure here is left for the owner pass to report. */
+    private static void warmFinalCarrierProjections(NeutralFinalChunk carrier) {
+        if (carrier == null) return;
         try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(source.encodedCarrier());
-            return java.util.HexFormat.of().formatHex(digest);
-        } catch (java.security.NoSuchAlgorithmException impossible) {
-            throw new AssertionError(impossible);
+            carrier.sourceFingerprintSha256();
+            for (TerrainAccessor.FinalLiveCarrierLane lane : TerrainAccessor.FinalLiveCarrierLane.values()) {
+                projectFinalCarrierSidecars(carrier, lane);
+            }
+        } catch (RuntimeException deferred) {
+            log.debug("Deferred carrier projection warm-up failure for chunk {},{}",
+                    carrier.chunkX(), carrier.chunkZ(), deferred);
         }
+    }
+
+    private static String finalCarrierSourceFingerprint(NeutralFinalChunk carrier) {
+        return carrier.sourceFingerprintSha256();
     }
 
     private boolean isSnapshotPresentationReady(int chunkX, int chunkZ) {
@@ -7740,7 +7757,7 @@ public final class WorldRuntime {
             try {
                 executeOwned(CHUNK_PREPARERS, () -> {
                     try {
-                        TerrainAccessor.PreparedChunk prepared = accessor.prepareDetachedChunkForActivation(chunkX, chunkZ);
+                        TerrainAccessor.PreparedChunk prepared = prepareChunkOffTick(chunkX, chunkZ);
                         enqueuePersistenceCompletion(() -> {
                             try {
                                 if (ownerTurnMayContinue() && finalCarrierTickScheduler.pendingPublicationChunks().contains(key)) {
@@ -8229,7 +8246,7 @@ public final class WorldRuntime {
             if (current == null || current.generation != generation
                     || activeChunkGeneration(key) != neighborhoodGeneration
                     || !activeSimulationChunks.contains(key)) return;
-            TerrainAccessor.PreparedChunk prepared = accessor.prepareDetachedChunkForActivation(chunkX, chunkZ);
+            TerrainAccessor.PreparedChunk prepared = prepareChunkOffTick(chunkX, chunkZ);
             if (activeChunkGeneration(key) == neighborhoodGeneration
                     && activeSimulationChunks.contains(key)) {
                 PreparedChunkDemand completed = new PreparedChunkDemand(
@@ -8962,23 +8979,43 @@ public final class WorldRuntime {
         }
         if (y < Blocks.MIN_Y || y > Blocks.MAX_Y) return 0;
         var source = accessor.snapshotSource(Math.floorDiv(x, Blocks.CHUNK_X), Math.floorDiv(z, Blocks.CHUNK_Z));
-        var carrier = source == null ? null : source.finalLiveCarrier().orElse(null);
+        var carrier = source == null ? null : source.finalLiveCarrierOrNull();
         if (carrier == null) return 0;
         int index = Blocks.blockIndex(Math.floorMod(x, Blocks.CHUNK_X), y, Math.floorMod(z, Blocks.CHUNK_Z));
         if (source.generatedBlockTypeAt(index) != blockType) return 0;
-        var exact = carrier.stateOverrides().get(index);
-        if (exact == null) exact = carrier.defaultState(blockType);
-        else if (exact.blockId() != blockType) return 0;
+        var exact = carrier.stateOverrideAt(index);
+        Map<BlockPos, OverlayValue> overlay = overlayChunk(blockChunkKey(x, z), false);
+        if (exact == null) {
+            // Every remaining check below can only lower this cell's state to 0, and an unedited chunk has no
+            // explicit overlay to raise it, so a block whose catalogue default projects to 0 is 0 already.
+            if (overlay == null && defaultCarrierProjection(carrier, blockType) == 0) return 0;
+            exact = carrier.defaultState(blockType);
+        } else if (exact.blockId() != blockType) return 0;
         var resident = accessor.residentBlock(x, y, z);
         if (!resident.isAvailable() || resident.blockType() != blockType) return 0;
         BlockPos pos = new BlockPos(x, y, z);
-        Map<BlockPos, OverlayValue> overlay = overlayChunk(blockChunkKey(x, z), false);
         OverlayValue explicit = overlay == null ? null : overlay.get(pos);
         if (explicit != null && (explicit.blockType & 0xffff) == blockType) return explicit.state & 0xff;
         if (protectedDecorationEdits.contains(pos) || mobMutationSites.contains(pos)
                 || structureOverlaySites.contains(structurePositionKey(x, y, z))) return 0;
         return CarrierStateProjection.projectState(blockType, exact);
     }
+
+    /** Projection of a block's catalogue default state, which is the same for every cell of this world. */
+    private int defaultCarrierProjection(NeutralFinalChunk carrier, int blockType) {
+        if (blockType < 0 || blockType >= defaultCarrierProjections.length) {
+            return CarrierStateProjection.projectState(blockType, carrier.defaultState(blockType));
+        }
+        int known = defaultCarrierProjections[blockType];
+        if (known == 0) {
+            known = CarrierStateProjection.projectState(blockType, carrier.defaultState(blockType)) + 1;
+            defaultCarrierProjections[blockType] = known;
+        }
+        return known - 1;
+    }
+
+    /** Per block ID, {@link #defaultCarrierProjection} plus one; 0 means not asked yet. */
+    private final int[] defaultCarrierProjections = new int[Blocks.BLOCK_ID_TABLE_CAPACITY];
 
     /**
      * owner의 sparse overlay 상태를 고정합니다. 엔진이 명시적으로 쓴 값(0 포함)은 encoder 가
@@ -15898,7 +15935,7 @@ public final class WorldRuntime {
         try {
             // This worker has no access to TerrainAccessor's mutable resident cache.  The owner adopts the
             // immutable material on its next turn, then requeues all sessions waiting for this chunk.
-            TerrainAccessor.PreparedChunk prepared = accessor.prepareDetachedChunkForActivation(chunkX, chunkZ);
+            TerrainAccessor.PreparedChunk prepared = prepareChunkOffTick(chunkX, chunkZ);
             SnapshotPresentation completedPresentation = presentation && hasProcessablePendingSnapshotRequest(key)
                     ? prepareSnapshotPresentation(prepared) : null;
             if (ownerTurnMayContinue()) preparedSnapshotChunks.add(

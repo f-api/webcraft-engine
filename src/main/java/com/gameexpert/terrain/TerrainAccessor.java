@@ -564,6 +564,11 @@ public final class TerrainAccessor {
             return java.util.Optional.ofNullable(finalLiveCarrier);
         }
 
+        /** The same carrier without an Optional, for per-cell lookups on the world tick. */
+        public NeutralFinalChunk finalLiveCarrierOrNull() {
+            return finalLiveCarrier;
+        }
+
         private int finalStateSlot(int blockIndex) {
             int mask = finalStateKeys.length - 1;
             int slot = blockIndex * 0x9E3779B9 & mask;

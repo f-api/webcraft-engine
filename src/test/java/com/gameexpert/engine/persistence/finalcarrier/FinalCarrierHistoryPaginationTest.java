@@ -102,6 +102,12 @@ class FinalCarrierHistoryPaginationTest {
         com.gameexpert.authority.versioned.NeutralFinalChunk source = mock(com.gameexpert.authority.versioned.NeutralFinalChunk.class);
         when(source.withSidecars(any())).thenReturn(source);
         when(source.encodedCarrier()).thenReturn(new byte[]{1});
+        try {
+            when(source.sourceFingerprintSha256()).thenReturn(java.util.HexFormat.of().formatHex(
+                    java.security.MessageDigest.getInstance("SHA-256").digest(new byte[]{1})));
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
         com.gameexpert.terrain.persistence.CanonicalWorldgenStore.ChunkCommit commit = mock(com.gameexpert.terrain.persistence.CanonicalWorldgenStore.ChunkCommit.class);
         when(commit.semanticFinalChunk()).thenReturn(source);
         com.gameexpert.terrain.persistence.CanonicalWorldgenStore.CanonicalChunkSnapshot snapshot = mock(com.gameexpert.terrain.persistence.CanonicalWorldgenStore.CanonicalChunkSnapshot.class);

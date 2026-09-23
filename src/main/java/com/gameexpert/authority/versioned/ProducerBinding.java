@@ -14,6 +14,9 @@ final class ProducerBinding {
     private final byte[] packedCarrier;
     private final int carrierLength;
     private final Map<Integer, StateOverride> defaults = new ConcurrentHashMap<>();
+    /** Lane projections of this one carrier; the world owner asks for the same few per activation. */
+    private final Map<Sidecars, Sidecars> projections = new ConcurrentHashMap<>();
+    private volatile String sourceFingerprint;
     ProducerBinding(IsolatedProducerSession producer, WorldGenerationProfile profile, byte[] carrier) {
         this.producer=Objects.requireNonNull(producer); this.profile=Objects.requireNonNull(profile);
         this.carrierLength=carrier.length;
@@ -47,6 +50,30 @@ final class ProducerBinding {
     }
     WorldGenerationProfile generationProfile(){return profile;}
     NeutralFinalChunk verify(int chunkX, int chunkZ, byte[] encoded) { return NeutralFinalChunkWire.verify(producer, profile, chunkX, chunkZ, encoded); }
+    /** Memoized {@link #select} sidecars: repeated activations of one chunk reuse the producer's answer. */
+    Sidecars projectSidecars(NeutralFinalChunk source, Sidecars selected) {
+        Sidecars known = projections.get(selected);
+        if (known != null) return known;
+        Sidecars projected = select(source, selected).sidecars();
+        if (projections.size() < 16) projections.putIfAbsent(selected, projected);
+        return projected;
+    }
+
+    /** Memoized SHA-256 of this carrier without sidecars; the owner asks for it on every lane pass. */
+    String sourceFingerprint(NeutralFinalChunk source) {
+        String known = sourceFingerprint;
+        if (known != null) return known;
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(select(source, Sidecars.EMPTY).encodedCarrier());
+            known = java.util.HexFormat.of().formatHex(digest);
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException("SHA-256 unavailable", impossible);
+        }
+        sourceFingerprint = known;
+        return known;
+    }
+
     NeutralFinalChunk select(NeutralFinalChunk source, Sidecars selected) {
         Objects.requireNonNull(selected);
         if(source.sidecars().equals(selected)) return source;

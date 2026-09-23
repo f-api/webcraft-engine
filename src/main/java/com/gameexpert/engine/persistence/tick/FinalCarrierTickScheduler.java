@@ -22,6 +22,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -473,6 +474,8 @@ public final class FinalCarrierTickScheduler {
     private final int capacity;
     private final LongSupplier nanoTime;
     private final Map<TickKey, ScheduledTick> pendingByKey = new HashMap<>();
+    /** Pending keys per chunk, so evicting one chunk does not walk every pending tick in the world. */
+    private final Map<Long, Set<TickKey>> pendingKeysByChunk = new HashMap<>();
     /**
      * Per-chunk count of resident queue changes (install, settlement progress, removal). A caller
      * that prepares a chunk recovery off the owner thread records the stamp first and accepts the
@@ -805,11 +808,13 @@ public final class FinalCarrierTickScheduler {
 
     /** Removes only resident queue state. Durable rows and their original due times remain intact. */
     public void evictChunk(int chunkX, int chunkZ) {
-        List<ScheduledTick> evicted = pendingByKey.values().stream()
-                .filter(tick -> Math.floorDiv(tick.x(), Blocks.CHUNK_X) == chunkX
-                        && Math.floorDiv(tick.z(), Blocks.CHUNK_Z) == chunkZ
-                        && !pendingSettlements.containsKey(tick.key()))
-                .toList();
+        Set<TickKey> keys = pendingKeysByChunk.get(chunkStampKey(chunkX, chunkZ));
+        if (keys == null || keys.isEmpty()) return;
+        List<ScheduledTick> evicted = new ArrayList<>();
+        for (TickKey key : List.copyOf(keys)) {
+            ScheduledTick tick = pendingByKey.get(key);
+            if (tick != null && !pendingSettlements.containsKey(key)) evicted.add(tick);
+        }
         for (ScheduledTick tick : evicted) remove(tick);
     }
 
@@ -1194,6 +1199,8 @@ public final class FinalCarrierTickScheduler {
         for (ScheduledTick tick : additions) {
             touchResident(tick);
             pendingByKey.put(tick.key(), tick);
+            pendingKeysByChunk.computeIfAbsent(chunkStampKey(Math.floorDiv(tick.x(), Blocks.CHUNK_X),
+                    Math.floorDiv(tick.z(), Blocks.CHUNK_Z)), ignored -> new LinkedHashSet<>()).add(tick.key());
             if (!queue(tick.lane()).add(tick)) {
                 throw new IllegalStateException("resident durable tick install changed during validation");
             }
@@ -1296,7 +1303,13 @@ public final class FinalCarrierTickScheduler {
         awaitingAcknowledgement.remove(tick.key());
         completedSettlements.remove(tick.key());
         begunPublications.remove(tick.key());
-        if (pendingByKey.remove(tick.key(), tick)) queue(tick.lane()).remove(tick);
+        if (pendingByKey.remove(tick.key(), tick)) {
+            queue(tick.lane()).remove(tick);
+            long chunk = chunkStampKey(Math.floorDiv(tick.x(), Blocks.CHUNK_X),
+                    Math.floorDiv(tick.z(), Blocks.CHUNK_Z));
+            Set<TickKey> keys = pendingKeysByChunk.get(chunk);
+            if (keys != null && keys.remove(tick.key()) && keys.isEmpty()) pendingKeysByChunk.remove(chunk);
+        }
     }
 
     private TreeSet<ScheduledTick> queue(Lane lane) {

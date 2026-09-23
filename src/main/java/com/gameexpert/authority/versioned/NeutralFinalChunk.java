@@ -36,6 +36,10 @@ public final class NeutralFinalChunk {
     public com.gameexpert.world.WorldGenerationProfile generationProfile(){return producer().generationProfile();}
     public NeutralFinalChunk verifyCarrier(byte[] encoded) { return producer().verify(chunkX, chunkZ, encoded); }
     public NeutralFinalChunk withSidecars(Sidecars selected) { return producer().select(this, selected); }
+    /** The verified sidecars of {@link #withSidecars}, answered once per carrier and selection. */
+    public Sidecars projectedSidecars(Sidecars selected) { return producer().projectSidecars(this, selected); }
+    /** Producer identity of this carrier without sidecars, as lowercase SHA-256 hex. */
+    public String sourceFingerprintSha256() { return producer().sourceFingerprint(this); }
     public StateOverride defaultState(int blockId) { return producer().defaultState(blockId); }
     public boolean matchesCanonicalMob(StructureEntity row) { return producer().matchesCanonicalMob(this, row); }
     public byte[] resolveLoot(byte[] context, long seed, String table, long rawSeed, int x, int y, int z, int slots, Long initialLo, Long initialHi) { return producer().loot(this, true, context, seed, table, rawSeed, x, y, z, slots, initialLo, initialHi); }
@@ -70,6 +74,35 @@ public final class NeutralFinalChunk {
     public int blockIdCount() { return blockIds.length; }
     public short blockIdAt(int index) { return blockIds.get(index); }
     public Map<Integer, StateOverride> stateOverrides() { return stateOverrides; }
+    /** {@link #stateOverrides()} without boxing the cell index; built once per carrier. */
+    public StateOverride stateOverrideAt(int blockIndex) {
+        int[] keys = overrideKeys;
+        if (keys == null) {
+            int capacity = 2;
+            while (capacity < stateOverrides.size() * 2) capacity <<= 1;
+            keys = new int[capacity];
+            StateOverride[] values = new StateOverride[capacity];
+            int mask = capacity - 1;
+            for (Map.Entry<Integer, StateOverride> entry : stateOverrides.entrySet()) {
+                int slot = entry.getKey() * 0x9E3779B9 & mask;
+                while (keys[slot] != 0) slot = (slot + 1) & mask;
+                keys[slot] = entry.getKey() + 1;
+                values[slot] = entry.getValue();
+            }
+            overrideValues = values;
+            overrideKeys = keys;
+        }
+        int mask = keys.length - 1;
+        int slot = blockIndex * 0x9E3779B9 & mask;
+        int encoded;
+        while ((encoded = keys[slot]) != 0) {
+            if (encoded == blockIndex + 1) return overrideValues[slot];
+            slot = (slot + 1) & mask;
+        }
+        return null;
+    }
+    private volatile int[] overrideKeys;
+    private StateOverride[] overrideValues;
     public int[] worldSurfaceWg() { return worldSurfaceWg.clone(); }
     public int[] oceanFloorWg() { return oceanFloorWg.clone(); }
     public int[] motionBlocking() { return motionBlocking.clone(); }
