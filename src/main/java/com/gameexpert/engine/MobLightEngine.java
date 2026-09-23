@@ -857,7 +857,7 @@ final class MobLightEngine {
             while (stamps[slot] == generation) {
                 if (xs[slot] == x && ys[slot] == y && zs[slot] == z
                         && modes[slot] == mode) {
-                    return sources[slot] == source.serial()
+                    return sources[slot] == serialOf(source)
                             && dependencyRevisions[slot] == dependencyRevision
                             ? values[slot] : MISS;
                 }
@@ -874,7 +874,7 @@ final class MobLightEngine {
             while (stamps[slot] == generation) {
                 if (xs[slot] == x && ys[slot] == y && zs[slot] == z
                         && modes[slot] == mode) {
-                    sources[slot] = source.serial();
+                    sources[slot] = serialOf(source);
                     dependencyRevisions[slot] = dependencyRevision;
                     values[slot] = value;
                     return;
@@ -887,10 +887,15 @@ final class MobLightEngine {
             ys[slot] = y;
             zs[slot] = z;
             modes[slot] = mode;
-            sources[slot] = source.serial();
+            sources[slot] = serialOf(source);
             dependencyRevisions[slot] = dependencyRevision;
             values[slot] = value;
             size++;
+        }
+
+        /** 0 stands for "no source": a query whose centre chunk is not resident still memoizes its answer. */
+        private static long serialOf(TerrainAccessor.SnapshotSource source) {
+            return source == null ? 0L : source.serial();
         }
 
         private void clear() {

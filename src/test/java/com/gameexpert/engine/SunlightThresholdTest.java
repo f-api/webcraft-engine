@@ -38,6 +38,17 @@ class SunlightThresholdTest {
     }
 
     @Test
+    void lightQueriesOutsideResidentChunksAreAnsweredNotThrown() {
+        MobLightEngine light = new MobLightEngine(caveWorld());
+        for (int pass = 0; pass < 2; pass++) {
+            assertEquals(0, light.sunlightLevel(4000, 70, 4000, 1_000));
+            assertEquals(0, light.lightLevel(4000, 70, 4000, 1_000));
+            assertFalse(light.sunlightAbove(4000, 70, 4000, 1_000, 11));
+            assertEquals(0, light.blockLight(-9000, 70, 9000));
+        }
+    }
+
+    @Test
     void boundedThresholdMatchesFullPropagation() {
         MobLightEngine light = new MobLightEngine(caveWorld());
         SplittableRandom random = new SplittableRandom(99);
