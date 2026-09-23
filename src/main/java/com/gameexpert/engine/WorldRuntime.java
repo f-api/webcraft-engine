@@ -171,6 +171,7 @@ public final class WorldRuntime {
     private static final Logger dropAudit = LoggerFactory.getLogger("gameexpert.audit.drop");
     private AuthorityEvidenceRuntimeCallbacks authorityEvidenceRuntimeCallbacks;
     private static final int GRACE_TICKS = 100; // 세션 0 이후 유예
+    private volatile boolean keepLoadedWhenEmpty;
     private static final double BOAT_HALF_FOOTPRINT = 0.75;
     static final int DECORATION_UPDATES_PER_TICK = 96;
     private static final long STRUCTURE_APPLY_BUDGET_NANOS = 2_000_000L;
@@ -13185,7 +13186,16 @@ public final class WorldRuntime {
     }
 
     int graceTicks() {
-        return GRACE_TICKS;
+        return keepLoadedWhenEmpty ? Integer.MAX_VALUE : GRACE_TICKS;
+    }
+
+    /**
+     * 사람이 모두 나가도 내리지 않는다. 월드 하나로 운영하는 서버는 다음 사람이 곧 같은 월드로
+     * 들어오므로, 내렸다가 다시 올리는 비용(저장된 청크를 처음부터 다시 읽는 것)을 매번 치를 이유가
+     * 없다. 실측: 내렸다 올린 월드의 첫 입장 80초, 올라 있는 월드 14초.
+     */
+    void keepLoadedWhenEmpty(boolean keep) {
+        this.keepLoadedWhenEmpty = keep;
     }
 
     boolean disposed() {

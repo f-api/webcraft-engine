@@ -1273,6 +1273,16 @@ public class WorldEngineManager
         return WorldTickLoop.mapStateMessage(map);
     }
 
+    private volatile boolean keepWorldsLoaded;
+
+    /**
+     * 빈 월드를 내리지 않게 한다(월드 하나로 운영하는 서버용). 이미 올라 있는 월드에도 바로 적용한다.
+     */
+    public void keepWorldsLoaded(boolean keep) {
+        this.keepWorldsLoaded = keep;
+        for (WorldRuntime runtime : runtimes.values()) runtime.keepLoadedWhenEmpty(keep);
+    }
+
     private WorldRuntime createRuntime(Long worldId, int seed, Difficulty difficulty) {
         com.gameexpert.cluster.WorldAuthority.requireRuntime(worldId);
         long traceCreateStart = JOIN_STAGE_TRACE ? System.nanoTime() : 0L;
@@ -1369,6 +1379,7 @@ public class WorldEngineManager
                     (traceFinalCarrier - traceCreateStart) / 1_000_000L,
                     (done - traceCreateStart) / 1_000_000L);
         }
+        runtime.keepLoadedWhenEmpty(keepWorldsLoaded);
         return runtime;
     }
 

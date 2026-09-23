@@ -47,6 +47,7 @@ public class EngineWarmup {
     private final ObjectProvider<WorldEngineManager> engines;
     private final boolean warmWorlds;
     private final int radius;
+    private final boolean keepLoaded;
 
     public EngineWarmup(ObjectProvider<WorldStore> worlds, ObjectProvider<WorldEngineManager> engines,
             Environment environment) {
@@ -54,10 +55,16 @@ public class EngineWarmup {
         this.engines = engines;
         this.warmWorlds = environment.getProperty("webcraft.warmWorldsOnStartup", Boolean.class, false);
         this.radius = Math.max(0, environment.getProperty("webcraft.warmWorldRadius", Integer.class, 4));
+        this.keepLoaded = environment.getProperty("webcraft.keepWorldsLoaded", Boolean.class, false);
     }
 
     @EventListener(ApplicationReadyEvent.class)
     public void warmOnStartup() {
+        if (keepLoaded) {
+            // 워밍보다 먼저 건다. 데운 월드가 아무도 없다는 이유로 10초 뒤 내려가면 워밍이 헛일이 된다.
+            WorldEngineManager manager = engines.getIfAvailable();
+            if (manager != null) manager.keepWorldsLoaded(true);
+        }
         Thread.ofVirtual().name("engine-table-warmup").start(() -> {
             loadTables();
             if (warmWorlds) warmExistingWorldSpawns();

@@ -61,6 +61,14 @@ class EngineWarmupTest {
     }
 
     @Test
+    void keepsWorldsLoadedWhenAsked() {
+        WorldEngineManager manager = mock(WorldEngineManager.class);
+        new EngineWarmup(provider(mock(WorldStore.class)), provider(manager),
+                new MockEnvironment().withProperty("webcraft.keepWorldsLoaded", "true")).warmOnStartup();
+        verify(manager).keepWorldsLoaded(true);
+    }
+
+    @Test
     void leavesWorldsAloneByDefault() throws Exception {
         WorldStore store = mock(WorldStore.class);
         WorldEngineManager manager = mock(WorldEngineManager.class);
@@ -70,5 +78,6 @@ class EngineWarmupTest {
 
         verify(store, never()).findRootWorlds();
         verify(manager, never()).warmSpawnArea(anyLong(), anyInt(), any(), anyInt());
+        verify(manager, never()).keepWorldsLoaded(org.mockito.ArgumentMatchers.anyBoolean());
     }
 }
