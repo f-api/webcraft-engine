@@ -47,6 +47,13 @@ public class DeviceNicknames {
     }
 
     private String claim(String deviceHash, String displayNickname) {
+        // 이미 이 기기가 쓰는 이름을 그대로 물어보면(꼬리표가 붙은 이름으로 다시 접속하는 경우)
+        // 새로 집지 않고 그 이름을 돌려준다.
+        var mine = repository.findByStoredNickname(displayNickname);
+        if (mine.isPresent()) {
+            return mine.get().getDeviceHash().equals(deviceHash) ? displayNickname
+                    : tagged(displayNickname, deviceHash, 0);
+        }
         boolean taken = repository.existsByDisplayNickname(displayNickname);
         for (int attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
             String candidate = (!taken && attempt == 0)
