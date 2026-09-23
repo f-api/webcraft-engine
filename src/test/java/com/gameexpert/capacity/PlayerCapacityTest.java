@@ -80,6 +80,28 @@ class PlayerCapacityTest {
     }
 
     @Test
+    void answersTheSeatQuestionFromMemoryWithoutTouchingTheGame() throws Exception {
+        PlayerCapacity capacity = capacity(1);
+        capacity.acquire("steve");
+        PlayerCapacityFilter filter = new PlayerCapacityFilter(capacity);
+
+        MockHttpServletRequest stranger = new MockHttpServletRequest("GET", PlayerCapacityFilter.CAPACITY_PATH);
+        stranger.setParameter("nickname", "alex");
+        MockHttpServletResponse full = new MockHttpServletResponse();
+        MockFilterChain untouched = new MockFilterChain();
+        filter.doFilter(stranger, full, untouched);
+        assertThat(full.getStatus()).isEqualTo(200);
+        assertThat(full.getContentAsString()).isEqualTo("{\"full\":true,\"live\":1,\"max\":1}");
+        assertThat(untouched.getRequest()).as("게임 쪽으로는 넘어가지 않는다").isNull();
+
+        MockHttpServletRequest returning = new MockHttpServletRequest("GET", PlayerCapacityFilter.CAPACITY_PATH);
+        returning.setParameter("nickname", "steve");
+        MockHttpServletResponse mine = new MockHttpServletResponse();
+        filter.doFilter(returning, mine, new MockFilterChain());
+        assertThat(mine.getContentAsString()).as("자리를 쥔 사람에게는 가득 차 있지 않다").contains("\"full\":false");
+    }
+
+    @Test
     void letsOtherRequestsAndFreeSeatsThrough() throws Exception {
         PlayerCapacity capacity = capacity(1);
         PlayerCapacityFilter filter = new PlayerCapacityFilter(capacity);
