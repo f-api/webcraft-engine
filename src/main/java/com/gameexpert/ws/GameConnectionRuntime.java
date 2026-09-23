@@ -47,6 +47,7 @@ public class GameConnectionRuntime {
     private static final Logger log = LoggerFactory.getLogger(GameConnectionRuntime.class);
 
     private final SessionRegistry registry;
+    private final com.gameexpert.capacity.PlayerCapacity capacity;
     private final GameTransport broadcaster;
     private final WorldEngineManager engineManager;
     private final EngineProperties properties;
@@ -88,6 +89,11 @@ public class GameConnectionRuntime {
         com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
         if (cluster != null && cluster.isPhysical(session)) {
             cluster.joinedPhysical(session);
+            return;
+        }
+        // 자리가 없으면 월드를 건드리기 전에 끝낸다. 앞단 필터가 대부분 막고, 여기서 최종 확인한다.
+        if (!capacity.acquire((String) session.getAttributes().get(ATTR_NICKNAME))) {
+            session.close(new CloseStatus(4003, "SERVER_FULL"));
             return;
         }
         Long worldId = (Long) session.getAttributes().get(ATTR_WORLD_ID);
@@ -257,6 +263,7 @@ public class GameConnectionRuntime {
     public void closed(WebSocketSession session) {
         com.gameexpert.cluster.ClusterRuntime cluster = com.gameexpert.cluster.ClusterRuntime.current();
         if (cluster != null && cluster.isPhysical(session)) { cluster.closedPhysical(session); return; }
+        capacity.release((String) session.getAttributes().get(ATTR_NICKNAME));
         if (dimensions == null) sessionLifecycle.release(session);
         else dimensions.close(session);
     }
