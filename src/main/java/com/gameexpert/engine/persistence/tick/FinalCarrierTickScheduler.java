@@ -1158,39 +1158,44 @@ public final class FinalCarrierTickScheduler {
     }
 
     private void installValidated(List<ScheduledTick> incoming) {
-        Map<TickKey, ScheduledTick> stagedByKey = new HashMap<>(pendingByKey);
-        Map<String, String> stagedPayloads = new HashMap<>(payloadBySourceLane);
-        TreeSet<ScheduledTick> stagedBlocks = new TreeSet<>(TICK_ORDER);
-        TreeSet<ScheduledTick> stagedFluids = new TreeSet<>(TICK_ORDER);
-        stagedBlocks.addAll(blockQueue);
-        stagedFluids.addAll(fluidQueue);
+        // 들어온 것만 따로 모아 검증하고, 다 통과하면 반영한다. 예전에는 대기 중인 틱 전체(최대 65536×2)를 매번
+        // 복사해 그 사본에 넣어 보며 검증해서, 설치 한 번이 대기량에 비례했다(월드 틱 스레드의 약 18%).
+        Map<TickKey, ScheduledTick> newByKey = new HashMap<>();
+        Map<String, String> newPayloads = new HashMap<>();
+        TreeSet<ScheduledTick> newBlocks = new TreeSet<>(TICK_ORDER);
+        TreeSet<ScheduledTick> newFluids = new TreeSet<>(TICK_ORDER);
         List<ScheduledTick> additions = new ArrayList<>();
         for (ScheduledTick tick : incoming) {
             String sourceLane = sourceLane(tick.receipt());
-            String previousPayload = stagedPayloads.putIfAbsent(
-                    sourceLane, tick.receipt().lanePayloadFingerprint());
+            String previousPayload = payloadBySourceLane.get(sourceLane);
+            if (previousPayload == null) {
+                previousPayload = newPayloads.putIfAbsent(sourceLane, tick.receipt().lanePayloadFingerprint());
+            }
             if (previousPayload != null
                     && !previousPayload.equals(tick.receipt().lanePayloadFingerprint())) {
                 throw new IllegalStateException("durable carrier source has conflicting lane payloads");
             }
-            ScheduledTick existing = stagedByKey.get(tick.key());
+            ScheduledTick existing = newByKey.get(tick.key());
+            if (existing == null) existing = pendingByKey.get(tick.key());
             if (existing != null) {
                 if (!existing.equals(tick)) {
                     throw new IllegalStateException("durable first-admission conflict for " + tick.key());
                 }
                 continue;
             }
-            stagedByKey.put(tick.key(), tick);
-            TreeSet<ScheduledTick> stagedQueue = tick.lane() == Lane.BLOCK
-                    ? stagedBlocks : stagedFluids;
-            if (!stagedQueue.add(tick)) {
+            newByKey.put(tick.key(), tick);
+            boolean block = tick.lane() == Lane.BLOCK;
+            TreeSet<ScheduledTick> liveQueue = block ? blockQueue : fluidQueue;
+            TreeSet<ScheduledTick> newQueue = block ? newBlocks : newFluids;
+            if (liveQueue.contains(tick) || !newQueue.add(tick)) {
                 throw new IllegalStateException("duplicate durable admission order in tick lane");
             }
             additions.add(tick);
         }
-        if (stagedBlocks.size() > capacity || stagedFluids.size() > capacity) {
+        if (blockQueue.size() + newBlocks.size() > capacity || fluidQueue.size() + newFluids.size() > capacity) {
             throw new IllegalStateException("durable final-carrier lane exceeds 65536 capacity");
         }
+        Map<String, String> stagedPayloads = newPayloads;
         for (Map.Entry<String, String> entry : stagedPayloads.entrySet()) {
             if (!payloadBySourceLane.containsKey(entry.getKey())) {
                 payloadBySourceLane.put(entry.getKey(), entry.getValue());
