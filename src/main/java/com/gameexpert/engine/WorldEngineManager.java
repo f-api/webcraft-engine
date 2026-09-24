@@ -1273,6 +1273,19 @@ public class WorldEngineManager
         return WorldTickLoop.mapStateMessage(map);
     }
 
+    /**
+     * 사람이 없는 동안 스폰 주변을 넓게 미리 생성한다. 이미 올라 있는 월드에만 한다(워밍·상시 유지와 함께 쓴다).
+     *
+     * @return 준비한 청크 수. 월드가 올라 있지 않으면 0
+     */
+    public int pregenerateAround(long worldId, int seed, int fromRadius, int toRadius) {
+        WorldRuntime runtime = runtimes.get(worldId);
+        if (runtime == null) return 0;
+        int[] spawn = worldSpawn(worldId, seed);
+        return runtime.pregenerateAround(Math.floorDiv(spawn[0], Blocks.CHUNK_X),
+                Math.floorDiv(spawn[2], Blocks.CHUNK_Z), fromRadius, toRadius, () -> !runtime.isEmpty());
+    }
+
     private volatile boolean keepWorldsLoaded;
 
     /**

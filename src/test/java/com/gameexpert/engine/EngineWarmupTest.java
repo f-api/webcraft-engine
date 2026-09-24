@@ -61,6 +61,31 @@ class EngineWarmupTest {
     }
 
     @Test
+    void pregeneratesBeyondTheWarmRingWhenAsked() throws Exception {
+        WorldAccess world = mock(WorldAccess.class);
+        when(world.getId()).thenReturn(7L);
+        when(world.getSeed()).thenReturn(1234L);
+        when(world.getDifficulty()).thenReturn(Difficulty.NORMAL);
+        WorldStore store = mock(WorldStore.class);
+        when(store.findRootWorlds()).thenReturn(List.of(world));
+        WorldEngineManager manager = mock(WorldEngineManager.class);
+
+        new EngineWarmup(provider(store), provider(manager), new MockEnvironment()
+                .withProperty("webcraft.warmWorldsOnStartup", "true")
+                .withProperty("webcraft.pregenerateRadius", "12")).warmOnStartup();
+
+        for (int wait = 0; wait < 200; wait++) {
+            try {
+                verify(manager).pregenerateAround(7L, 1234, 5, 12);
+                return;
+            } catch (AssertionError notYet) {
+                Thread.sleep(25);
+            }
+        }
+        verify(manager).pregenerateAround(7L, 1234, 5, 12);
+    }
+
+    @Test
     void keepsWorldsLoadedWhenAsked() {
         WorldEngineManager manager = mock(WorldEngineManager.class);
         new EngineWarmup(provider(mock(WorldStore.class)), provider(manager),

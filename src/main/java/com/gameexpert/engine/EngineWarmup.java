@@ -48,6 +48,7 @@ public class EngineWarmup {
     private final boolean warmWorlds;
     private final int radius;
     private final boolean keepLoaded;
+    private final int pregenerateRadius;
 
     public EngineWarmup(ObjectProvider<WorldStore> worlds, ObjectProvider<WorldEngineManager> engines,
             Environment environment) {
@@ -56,6 +57,7 @@ public class EngineWarmup {
         this.warmWorlds = environment.getProperty("webcraft.warmWorldsOnStartup", Boolean.class, false);
         this.radius = Math.max(0, environment.getProperty("webcraft.warmWorldRadius", Integer.class, 4));
         this.keepLoaded = environment.getProperty("webcraft.keepWorldsLoaded", Boolean.class, false);
+        this.pregenerateRadius = Math.max(0, environment.getProperty("webcraft.pregenerateRadius", Integer.class, 0));
     }
 
     @EventListener(ApplicationReadyEvent.class)
@@ -96,6 +98,22 @@ public class EngineWarmup {
             return;
         }
         log.info("월드 스폰 프리워밍 시작: {}개 ({}ms)", warmed, (System.nanoTime() - started) / 1_000_000L);
+        if (pregenerateRadius > radius) pregenerateWorlds(store, manager);
+    }
+
+    /** 워밍 반경 바깥을 선생성 반경까지 미리 만든다. 사람이 있으면 멈췄다가 비면 이어 간다. */
+    private void pregenerateWorlds(WorldStore store, WorldEngineManager manager) {
+        for (WorldAccess world : store.findRootWorlds()) {
+            long started = System.nanoTime();
+            try {
+                int produced = manager.pregenerateAround(world.getId(), (int) world.getSeed(),
+                        radius + 1, pregenerateRadius);
+                log.info("월드 선생성 완료: world={} 반경 {}→{} 청크 {}개 ({}s)", world.getId(), radius + 1,
+                        pregenerateRadius, produced, (System.nanoTime() - started) / 1_000_000_000L);
+            } catch (RuntimeException failure) {
+                log.info("월드 선생성 중단: world={} ({})", world.getId(), failure.toString());
+            }
+        }
     }
 
     /** Initializes every table; a failure here is only a lost head start, so it is logged and skipped. */

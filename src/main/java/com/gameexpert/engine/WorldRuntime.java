@@ -888,6 +888,40 @@ public final class WorldRuntime {
         }
     }
 
+    /**
+     * 한가할 때 스폰 주변을 넓게 미리 생성해 둔다. 결과는 저장소에 남기기만 하고 올리지 않는다.
+     *
+     * <p>코어가 둘뿐인 서버에서 여럿이 새 지형을 탐험하면 생성이 CPU 를 다 써 틱이 밀렸다. 월드가 하나로
+     * 고정이면 사람이 없는 동안 미리 만들어 두는 편이 낫다. 접속자가 있으면 {@code paused} 가 참이라
+     * 멈추고 기다린다 — 플레이 중인 사람과 코어를 다투지 않는다.</p>
+     *
+     * @return 이번에 준비한 청크 수
+     */
+    int pregenerateAround(int centerChunkX, int centerChunkZ, int fromRadius, int toRadius,
+            java.util.function.BooleanSupplier paused) {
+        int produced = 0;
+        for (int distance = Math.max(0, fromRadius); distance <= toRadius; distance++) {
+            for (int dx = -distance; dx <= distance; dx++) {
+                for (int dz = -distance; dz <= distance; dz++) {
+                    if (Math.max(Math.abs(dx), Math.abs(dz)) != distance) continue;
+                    while (paused.getAsBoolean()) {
+                        if (disposed()) return produced;
+                        try {
+                            Thread.sleep(1_000L);
+                        } catch (InterruptedException interrupted) {
+                            Thread.currentThread().interrupt();
+                            return produced;
+                        }
+                    }
+                    if (disposed()) return produced;
+                    prepareChunkOffTick(centerChunkX + dx, centerChunkZ + dz);
+                    produced++;
+                }
+            }
+        }
+        return produced;
+    }
+
     void prepareDimensionArrival(double[] pose) {
         int x = (int) Math.floor(pose[0]), z = (int) Math.floor(pose[2]);
         List<TerrainAccessor.PreparedChunk> chunks = new ArrayList<>();
