@@ -19,14 +19,19 @@ import org.springframework.stereotype.Component;
 public class PlayerCapacity {
 
     private final int max;
+    private final boolean fixedWorld;
     private final AtomicInteger live = new AtomicInteger();
     private final Set<String> holders = ConcurrentHashMap.newKeySet();
 
     public PlayerCapacity(Environment environment) {
         this.max = Math.max(1, environment.getProperty("webcraft.players.max", Integer.class, 3));
+        this.fixedWorld = environment.getProperty("webcraft.worlds.fixed", Boolean.class, false);
     }
 
     public int max() { return max; }
+
+    /** 월드를 새로 만들거나 지울 수 없는 서버인가. 로비가 해당 버튼을 숨기는 데 쓴다. */
+    public boolean fixedWorld() { return fixedWorld; }
 
     public int live() { return live.get(); }
 

@@ -91,7 +91,7 @@ class PlayerCapacityTest {
         MockFilterChain untouched = new MockFilterChain();
         filter.doFilter(stranger, full, untouched);
         assertThat(full.getStatus()).isEqualTo(200);
-        assertThat(full.getContentAsString()).isEqualTo("{\"full\":true,\"live\":1,\"max\":1}");
+        assertThat(full.getContentAsString()).isEqualTo("{\"full\":true,\"live\":1,\"max\":1,\"fixedWorld\":false}");
         assertThat(untouched.getRequest()).as("게임 쪽으로는 넘어가지 않는다").isNull();
 
         MockHttpServletRequest returning = new MockHttpServletRequest("GET", PlayerCapacityFilter.CAPACITY_PATH);
@@ -99,6 +99,15 @@ class PlayerCapacityTest {
         MockHttpServletResponse mine = new MockHttpServletResponse();
         filter.doFilter(returning, mine, new MockFilterChain());
         assertThat(mine.getContentAsString()).as("자리를 쥔 사람에게는 가득 차 있지 않다").contains("\"full\":false");
+    }
+
+    @Test
+    void tellsTheLobbyWhenTheWorldIsFixed() throws Exception {
+        PlayerCapacity capacity = new PlayerCapacity(new MockEnvironment().withProperty("webcraft.worlds.fixed", "true"));
+        MockHttpServletResponse response = new MockHttpServletResponse();
+        new PlayerCapacityFilter(capacity).doFilter(
+                new MockHttpServletRequest("GET", PlayerCapacityFilter.CAPACITY_PATH), response, new MockFilterChain());
+        assertThat(response.getContentAsString()).contains("\"fixedWorld\":true");
     }
 
     @Test

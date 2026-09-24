@@ -42,7 +42,7 @@ public class PlayerCapacityFilter extends OncePerRequestFilter implements Ordere
             response.setHeader("Cache-Control", "no-store");
             response.setContentType("application/json;charset=UTF-8");
             response.getWriter().write("{\"full\":" + full + ",\"live\":" + capacity.live()
-                    + ",\"max\":" + capacity.max() + "}");
+                    + ",\"max\":" + capacity.max() + ",\"fixedWorld\":" + capacity.fixedWorld() + "}");
             return;
         }
         // 이미 자리를 쥔 사람이 다시 들어오는 것은 막지 않는다(끊겼다 돌아오는 경우).
