@@ -39,7 +39,17 @@ public final class NeutralFinalChunk {
     /** The verified sidecars of {@link #withSidecars}, answered once per carrier and selection. */
     public Sidecars projectedSidecars(Sidecars selected) { return producer().projectSidecars(this, selected); }
     /** Producer identity of this carrier without sidecars, as lowercase SHA-256 hex. */
-    public String sourceFingerprintSha256() { return producer().sourceFingerprint(this); }
+    public String sourceFingerprintSha256() {
+        // 내용과 생산기 묶음은 한 번 정해지면 바뀌지 않으므로 지문도 한 번만 묻는다. 청크 하나가 승인·확인·정산마다
+        // 같은 지문을 생산기에 다시 인코딩해 물으면서 영속 스레드 CPU 의 약 15%를 썼다.
+        String cached = sourceFingerprint;
+        if (cached == null) {
+            cached = producer().sourceFingerprint(this);
+            sourceFingerprint = cached;
+        }
+        return cached;
+    }
+    private volatile String sourceFingerprint;
     public StateOverride defaultState(int blockId) { return producer().defaultState(blockId); }
     public boolean matchesCanonicalMob(StructureEntity row) { return producer().matchesCanonicalMob(this, row); }
     public byte[] resolveLoot(byte[] context, long seed, String table, long rawSeed, int x, int y, int z, int slots, Long initialLo, Long initialHi) { return producer().loot(this, true, context, seed, table, rawSeed, x, y, z, slots, initialLo, initialHi); }

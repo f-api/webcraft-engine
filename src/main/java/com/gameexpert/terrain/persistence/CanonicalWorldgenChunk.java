@@ -103,8 +103,47 @@ public class CanonicalWorldgenChunk {
             throw new IllegalStateException("canonical worldgen row ABI/schema is not current");
         }
         validateGroupMetadata();
-        return new CanonicalWorldgenStore.ChunkCommit(worldId, worldIdentity, chunkX, chunkZ,
-                finalCarrier, structureCarrier, persistedSuccessor(), commitFingerprint);
+        byte[] successor = persistedSuccessor();
+        String key = worldId + "/" + worldIdentity + "/" + chunkX + "/" + chunkZ;
+        byte[] digest = contentDigest(finalCarrier, structureCarrier, successor, commitFingerprint);
+        synchronized (VALIDATED_COMMITS) {
+            ValidatedCommit hit = VALIDATED_COMMITS.get(key);
+            if (hit != null && Arrays.equals(hit.digest, digest)) return hit.commit;
+        }
+        var commit = new CanonicalWorldgenStore.ChunkCommit(worldId, worldIdentity, chunkX, chunkZ,
+                finalCarrier, structureCarrier, successor, commitFingerprint);
+        synchronized (VALIDATED_COMMITS) {
+            VALIDATED_COMMITS.put(key, new ValidatedCommit(digest, commit));
+        }
+        return commit;
+    }
+
+    /**
+     * 같은 행을 이미 생산기로 검증해 만든 커밋. 같은 청크 행이 스냅샷·승인·확인·정산마다 다시 읽혀 매번 전체 검증을
+     * 치렀다(영속 스레드 CPU 의 약 30%). 검증은 저장된 바이트만의 함수이고 커밋은 불변이라, 바이트 요약이 같으면 그대로
+     * 돌려준다. 최근 청크만 남긴다(한 번에 몰리는 반복만 잡으면 된다).
+     */
+    private record ValidatedCommit(byte[] digest, CanonicalWorldgenStore.ChunkCommit commit) {}
+    private static final int VALIDATED_COMMIT_CACHE_SIZE = 48;
+    private static final java.util.LinkedHashMap<String, ValidatedCommit> VALIDATED_COMMITS =
+            new java.util.LinkedHashMap<>(64, 0.75f, true) {
+                @Override protected boolean removeEldestEntry(java.util.Map.Entry<String, ValidatedCommit> eldest) {
+                    return size() > VALIDATED_COMMIT_CACHE_SIZE;
+                }
+            };
+
+    private static byte[] contentDigest(byte[]... parts) {
+        try {
+            var sha = java.security.MessageDigest.getInstance("SHA-256");
+            for (byte[] part : parts) {
+                int length = part == null ? -1 : part.length;
+                sha.update(new byte[] {(byte) (length >>> 24), (byte) (length >>> 16), (byte) (length >>> 8), (byte) length});
+                if (part != null) sha.update(part);
+            }
+            return sha.digest();
+        } catch (java.security.NoSuchAlgorithmException impossible) {
+            throw new IllegalStateException(impossible);
+        }
     }
     public int laneClaimMask() { return laneClaimMask; }
     public int laneAckMask() { return laneAckMask; }
