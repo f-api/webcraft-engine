@@ -91,7 +91,7 @@ class PlayerCapacityTest {
         MockFilterChain untouched = new MockFilterChain();
         filter.doFilter(stranger, full, untouched);
         assertThat(full.getStatus()).isEqualTo(200);
-        assertThat(full.getContentAsString()).isEqualTo("{\"full\":true,\"live\":1,\"max\":1,\"fixedWorld\":false}");
+        assertThat(full.getContentAsString()).isEqualTo("{\"full\":true,\"live\":1,\"max\":1,\"fixedWorld\":true}");
         assertThat(untouched.getRequest()).as("게임 쪽으로는 넘어가지 않는다").isNull();
 
         MockHttpServletRequest returning = new MockHttpServletRequest("GET", PlayerCapacityFilter.CAPACITY_PATH);

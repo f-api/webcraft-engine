@@ -25,7 +25,7 @@ public class PlayerCapacity {
 
     public PlayerCapacity(Environment environment) {
         this.max = Math.max(1, environment.getProperty("webcraft.players.max", Integer.class, 3));
-        this.fixedWorld = environment.getProperty("webcraft.worlds.fixed", Boolean.class, false);
+        this.fixedWorld = environment.getProperty("webcraft.worlds.fixed", Boolean.class, true);
     }
 
     public int max() { return max; }

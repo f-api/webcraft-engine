@@ -54,9 +54,9 @@ public class EngineWarmup {
             Environment environment) {
         this.worlds = worlds;
         this.engines = engines;
-        this.warmWorlds = environment.getProperty("webcraft.warmWorldsOnStartup", Boolean.class, false);
+        this.warmWorlds = environment.getProperty("webcraft.warmWorldsOnStartup", Boolean.class, true);
         this.radius = Math.max(0, environment.getProperty("webcraft.warmWorldRadius", Integer.class, 4));
-        this.keepLoaded = environment.getProperty("webcraft.keepWorldsLoaded", Boolean.class, false);
+        this.keepLoaded = environment.getProperty("webcraft.keepWorldsLoaded", Boolean.class, true);
         this.pregenerateRadius = Math.max(0, environment.getProperty("webcraft.pregenerateRadius", Integer.class, 0));
     }
 

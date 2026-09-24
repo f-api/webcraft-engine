@@ -17,7 +17,7 @@ import jakarta.servlet.http.HttpServletResponse;
  *
  * 작은 서버에서는 월드를 새로 만드는 순간 지형 생성이 CPU를 다 쓰고, 실수로 지우면 되돌릴
  * 수 없다. 켜면 만들기·지우기 요청을 주소만 보고 돌려보내고, 플레이에 필요한 조회와 접속은
- * 그대로 둔다. {@code webcraft.worlds.fixed=true} 일 때만 동작하며 기본은 꺼짐이다.
+ * 그대로 둔다. {@code webcraft.worlds.fixed=true} 가 기본이다(server 라인). false 로 두면 막지 않는다.
  */
 @Component
 public class FixedWorldFilter extends OncePerRequestFilter implements Ordered {
@@ -25,7 +25,7 @@ public class FixedWorldFilter extends OncePerRequestFilter implements Ordered {
     private final boolean fixed;
 
     public FixedWorldFilter(Environment environment) {
-        this.fixed = environment.getProperty("webcraft.worlds.fixed", Boolean.class, false);
+        this.fixed = environment.getProperty("webcraft.worlds.fixed", Boolean.class, true);
     }
 
     @Override

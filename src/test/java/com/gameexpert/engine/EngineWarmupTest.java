@@ -94,11 +94,13 @@ class EngineWarmupTest {
     }
 
     @Test
-    void leavesWorldsAloneByDefault() throws Exception {
+    void leavesWorldsAloneWhenTurnedOff() throws Exception {
         WorldStore store = mock(WorldStore.class);
         WorldEngineManager manager = mock(WorldEngineManager.class);
 
-        new EngineWarmup(provider(store), provider(manager), new MockEnvironment()).warmOnStartup();
+        new EngineWarmup(provider(store), provider(manager), new MockEnvironment()
+                .withProperty("webcraft.warmWorldsOnStartup", "false")
+                .withProperty("webcraft.keepWorldsLoaded", "false")).warmOnStartup();
         Thread.sleep(300);
 
         verify(store, never()).findRootWorlds();

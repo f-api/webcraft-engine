@@ -45,12 +45,19 @@ class FixedWorldFilterTest {
     }
 
     @Test
-    void staysOutOfTheWayByDefault() throws Exception {
+    void locksWorldsByDefaultAndStaysOutOfTheWayWhenTurnedOff() throws Exception {
+        MockFilterChain locked = new MockFilterChain();
+        MockHttpServletResponse refused = new MockHttpServletResponse();
+        new FixedWorldFilter(new MockEnvironment())
+                .doFilter(new MockHttpServletRequest("POST", "/worlds"), refused, locked);
+        assertThat(locked.getRequest()).as("server 라인은 고정 월드가 기본이다").isNull();
+        assertThat(refused.getStatus()).isEqualTo(403);
+
         MockFilterChain chain = new MockFilterChain();
         MockHttpServletResponse response = new MockHttpServletResponse();
-        new FixedWorldFilter(new MockEnvironment())
+        new FixedWorldFilter(new MockEnvironment().withProperty("webcraft.worlds.fixed", "false"))
                 .doFilter(new MockHttpServletRequest("POST", "/worlds"), response, chain);
-        assertThat(chain.getRequest()).as("기본값은 꺼짐이라 학생 과제의 월드 생성은 그대로다").isNotNull();
+        assertThat(chain.getRequest()).isNotNull();
         assertThat(response.getStatus()).isEqualTo(200);
     }
 }
